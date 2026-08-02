@@ -44,7 +44,7 @@ jobs:
         uses: actions/checkout@v4
 
       # ============================================
-      # ⬇️ DOWNLOAD ZIP DARI RELEASE BOT
+      # ⬇️ DOWNLOAD ZIP DARI RELEASE BOT (FIXED)
       # ============================================
       - name: 📥 Download Project ZIP from Bot Release
         if: github.event.inputs.release_tag != ''
@@ -56,11 +56,11 @@ jobs:
           sleep 15
           
           # Get release info dengan RETRY
-          MAX_RETRY=5
+          MAX_RETRY=10
           RETRY=0
-          ASSET_URL=""
+          DOWNLOAD_SUCCESS=0
           
-          while [ $RETRY -lt $MAX_RETRY ]; do
+          while [ $RETRY -lt $MAX_RETRY ] && [ $DOWNLOAD_SUCCESS -eq 0 ]; do
             echo "🔍 Attempt $((RETRY+1))/$MAX_RETRY: Mencari release..."
             
             # Get release by tag
@@ -73,104 +73,73 @@ jobs:
             if [ "$RELEASE_ID" != "null" ] && [ -n "$RELEASE_ID" ]; then
               echo "✅ Release ditemukan! ID: $RELEASE_ID"
               
-              # Get asset URL
-              ASSET_URL=$(echo "$RELEASE_RESPONSE" | jq -r '.assets[0].browser_download_url')
+              # Get asset ID dan URL
+              ASSET_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.assets[0].id')
+              ASSET_URL=$(echo "$RELEASE_RESPONSE" | jq -r '.assets[0].url')
+              BROWSER_URL=$(echo "$RELEASE_RESPONSE" | jq -r '.assets[0].browser_download_url')
+              ASSET_NAME=$(echo "$RELEASE_RESPONSE" | jq -r '.assets[0].name')
+              ASSET_SIZE=$(echo "$RELEASE_RESPONSE" | jq -r '.assets[0].size')
               
-              if [ "$ASSET_URL" != "null" ] && [ -n "$ASSET_URL" ]; then
-                echo "✅ Asset ditemukan: $ASSET_URL"
-                break
-              else
-                echo "⚠️ Release ada tapi asset belum siap, tunggu 10 detik..."
-                sleep 10
+              echo "Asset ID: $ASSET_ID"
+              echo "Asset Name: $ASSET_NAME"
+              echo "Asset Size: $ASSET_SIZE bytes"
+              
+              if [ "$ASSET_ID" != "null" ] && [ -n "$ASSET_ID" ]; then
+                # Gunakan API download (lebih reliable)
+                echo "📦 Download via API: $ASSET_URL"
+                curl -L -f -H "Accept: application/octet-stream" \
+                  -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                  -o project.zip \
+                  "$ASSET_URL"
+                
+                CURL_EXIT=$?
+                FILE_SIZE=$(stat -c%s project.zip 2>/dev/null || echo 0)
+                
+                if [ $CURL_EXIT -eq 0 ] && [ "$FILE_SIZE" -gt 1000 ]; then
+                  echo "✅ Download sukses! Size: $FILE_SIZE bytes"
+                  DOWNLOAD_SUCCESS=1
+                  break
+                else
+                  echo "⚠️ API download gagal (exit: $CURL_EXIT, size: $FILE_SIZE), coba browser URL..."
+                  curl -L -f -o project.zip "$BROWSER_URL"
+                  CURL_EXIT=$?
+                  FILE_SIZE=$(stat -c%s project.zip 2>/dev/null || echo 0)
+                  
+                  if [ $CURL_EXIT -eq 0 ] && [ "$FILE_SIZE" -gt 1000 ]; then
+                    echo "✅ Browser download sukses! Size: $FILE_SIZE bytes"
+                    DOWNLOAD_SUCCESS=1
+                    break
+                  fi
+                fi
               fi
-            else
-              echo "⚠️ Release belum ditemukan, tunggu 10 detik..."
-              sleep 10
             fi
             
+            echo "⚠️ Download gagal, tunggu 20 detik..."
+            sleep 20
             RETRY=$((RETRY+1))
           done
           
-          if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
-            echo "❌ Gagal mendapatkan asset setelah $MAX_RETRY kali percobaan!"
-            echo "Release response:"
-            echo "$RELEASE_RESPONSE" | jq '.'
-            
-            # Coba list semua release
+          if [ $DOWNLOAD_SUCCESS -eq 0 ]; then
+            echo "❌ Gagal download setelah $MAX_RETRY kali percobaan!"
             echo ""
             echo "📋 Daftar release yang ada:"
             curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
               "https://api.github.com/repos/${{ github.repository }}/releases?per_page=5" | \
-              jq '.[].tag_name'
-            
+              jq '.[] | {tag_name, assets: [.assets[]? | {name, size, state}]}'
             exit 1
           fi
           
-          # Download dengan follow redirect
-          echo "📦 Download dari: $ASSET_URL"
-          curl -L -f -o project.zip "$ASSET_URL"
-          
-          # Cek file
-          if [ ! -f project.zip ]; then
-            echo "❌ File ZIP gagal didownload!"
-            exit 1
-          fi
-          
-          FILE_SIZE=$(stat -c%s project.zip 2>/dev/null || echo 0)
-          echo "📏 Size: $(du -h project.zip | cut -f1) ($FILE_SIZE bytes)"
-          
-          # VALIDASI: Cek apakah file benar-benar ZIP
-          FILE_TYPE=$(file project.zip)
-          echo "📄 File type: $FILE_TYPE"
-          
-          if [ "$FILE_SIZE" -lt 100 ]; then
-            echo "❌ File terlalu kecil ($FILE_SIZE bytes), bukan ZIP valid!"
-            echo "Isi file:"
-            cat project.zip
-            echo ""
-            echo "Mungkin release belum siap atau asset korup."
-            echo "Menunggu 30 detik dan mencoba lagi..."
-            sleep 30
-            curl -L -f -o project.zip "$ASSET_URL"
-            FILE_SIZE=$(stat -c%s project.zip 2>/dev/null || echo 0)
-            echo "📏 Size retry: $(du -h project.zip | cut -f1) ($FILE_SIZE bytes)"
-          fi
-          
-          if [ "$FILE_SIZE" -lt 1000 ]; then
-            echo "❌ File masih terlalu kecil setelah retry!"
-            echo "Mencoba download dengan header berbeda..."
-            curl -L -f -H "Accept: application/octet-stream" -o project.zip "$ASSET_URL"
-            FILE_SIZE=$(stat -c%s project.zip 2>/dev/null || echo 0)
-            echo "📏 Size retry 2: $FILE_SIZE bytes"
-          fi
-          
-          if [ "$FILE_SIZE" -lt 1000 ]; then
-            echo "❌ File tetap kecil, coba gunakan API download..."
-            ASSET_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.assets[0].id')
-            curl -L -f -H "Accept: application/octet-stream" \
-              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-              -o project.zip \
-              "https://api.github.com/repos/${{ github.repository }}/releases/assets/$ASSET_ID"
-            FILE_SIZE=$(stat -c%s project.zip 2>/dev/null || echo 0)
-            echo "📏 Size retry 3: $FILE_SIZE bytes"
-          fi
-          
-          if [ "$FILE_SIZE" -lt 1000 ]; then
-            echo "❌ GAGAL TOTAL! File tidak bisa didownload dengan benar."
-            echo "File size: $FILE_SIZE bytes"
-            echo "File content:"
-            cat project.zip 2>/dev/null || echo "(binary)"
-            exit 1
-          fi
+          echo "📏 Final size: $(du -h project.zip | cut -f1)"
           
           # Ekstrak ZIP
           echo "📂 Mengekstrak ZIP..."
           mkdir -p project_extracted
           unzip -o project.zip -d project_extracted/ || {
-            echo "❌ Gagal mengekstrak ZIP! Mencoba dengan 7z..."
+            echo "❌ unzip gagal, mencoba 7z..."
             sudo apt-get install -y -qq p7zip-full 2>/dev/null
             7z x project.zip -oproject_extracted/ -y || {
-              echo "❌ Gagal total mengekstrak!"
+              echo "❌ Ekstrak gagal total!"
+              echo "File type: $(file project.zip)"
               exit 1
             }
           }
@@ -181,7 +150,6 @@ jobs:
             cp -rf project_extracted/* .
             cp -rf project_extracted/.* . 2>/dev/null || true
           else
-            # Cari di subfolder
             echo "🔍 Mencari pubspec.yaml di subfolder..."
             SUBFOLDER=$(find project_extracted -name "pubspec.yaml" -not -path "*/.*" | head -1)
             
@@ -202,9 +170,7 @@ jobs:
           rm -rf project_extracted project.zip
           
           echo "✅ Project siap:"
-          echo "---"
           ls -la
-          echo "---"
           head -20 pubspec.yaml
 
       - name: Setup Java 17
@@ -783,7 +749,7 @@ jobs:
           fi
 
       # ============================================
-      # 🛠️ DEEP FIX & FINAL RETRY
+      # 🛠️ DEEP FIX & FINAL RETRY (FIXED - FLUTTER RE-SETUP)
       # ============================================
       - name: 🛠️ Deep Fix & Final Retry (Attempt 3)
         if: failure()
@@ -795,12 +761,41 @@ jobs:
           BUILD_TYPE="${{ steps.build_info.outputs.build_type }}"
           echo "Build type: $BUILD_TYPE"
           
-          # Cek apakah flutter masih ada
+          # RE-SETUP FLUTTER jika hilang
           if ! command -v flutter >/dev/null 2>&1; then
-            echo "⚠️ Flutter not found! Ini tidak seharusnya terjadi."
-            echo "Path: $PATH"
+            echo "⚠️ Flutter tidak ditemukan! Mencoba re-setup..."
+            
+            # Coba cari flutter di cache GitHub Actions
+            FLUTTER_CACHE="/opt/hostedtoolcache/flutter"
+            if [ -d "$FLUTTER_CACHE" ]; then
+              FLUTTER_DIR=$(find "$FLUTTER_CACHE" -maxdepth 2 -name "flutter" -type f 2>/dev/null | head -1)
+              if [ -n "$FLUTTER_DIR" ]; then
+                echo "✅ Flutter ditemukan di cache: $FLUTTER_DIR"
+                export PATH="$(dirname "$FLUTTER_DIR"):$PATH"
+                flutter --version
+              fi
+            fi
+            
+            # Jika masih tidak ketemu, download Flutter langsung
+            if ! command -v flutter >/dev/null 2>&1; then
+              echo "📦 Download Flutter SDK..."
+              FLUTTER_VERSION="3.32.8"
+              curl -L -o flutter.tar.xz "https://storage.googleapis.com/flutter_infra_release/releases/stable/linux/flutter_linux_${FLUTTER_VERSION}-stable.tar.xz"
+              tar -xf flutter.tar.xz -C /tmp/
+              export PATH="/tmp/flutter/bin:$PATH"
+              flutter config --no-analytics
+              flutter --version
+              echo "✅ Flutter SDK siap!"
+            fi
+          fi
+          
+          # Verifikasi Flutter
+          if ! command -v flutter >/dev/null 2>&1; then
+            echo "❌ Flutter tetap tidak ditemukan!"
             exit 1
           fi
+          
+          echo "Flutter: $(flutter --version)"
           
           # Ultimate clean
           flutter clean 2>/dev/null || true
