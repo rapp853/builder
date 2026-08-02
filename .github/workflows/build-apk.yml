@@ -51,9 +51,9 @@ jobs:
         run: |
           echo "📥 Mendownload project dari release: ${{ github.event.inputs.release_tag }}"
           
-          # TUNGGU dulu 15 detik untuk memastikan release sudah siap
-          echo "⏳ Menunggu 15 detik untuk memastikan release siap..."
-          sleep 15
+          # TUNGGU sebentar untuk memastikan release sudah siap
+          echo "⏳ Menunggu 5 detik untuk memastikan release siap..."
+          sleep 5
           
           # Get release info dengan RETRY
           MAX_RETRY=5
@@ -183,6 +183,31 @@ jobs:
           flutter-version: '3.32.8'
           channel: 'stable'
           cache: true
+
+      # ============================================
+      # ⚡ OPTIMASI: Cache ImageMagick (hindari apt-get update tiap build)
+      # ============================================
+      - name: ⚡ Cache ImageMagick
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: imagemagick
+          version: 1.0
+
+      # ============================================
+      # ⚡ OPTIMASI: Gradle build cache & parallel execution
+      # ============================================
+      - name: ⚡ Optimize Gradle
+        run: |
+          mkdir -p ~/.gradle
+          cat >> gradle.properties << 'EOF'
+          org.gradle.jvmargs=-Xmx4096m -XX:+HeapDumpOnOutOfMemoryError
+          org.gradle.parallel=true
+          org.gradle.caching=true
+          org.gradle.configureondemand=true
+          android.useAndroidX=true
+          EOF
+          echo "✅ gradle.properties dioptimasi:"
+          cat gradle.properties
 
       # ============================================
       # 🎨 REGENERATE LAUNCHER ICONS (FIX UTAMA)
@@ -632,7 +657,7 @@ jobs:
         run: |
           flutter build apk --debug \
             --no-shrink \
-            --target-platform android-arm,android-arm64,android-x64
+            --target-platform android-arm64
           echo "APK Debug selesai"
 
       - name: Build APK Release
@@ -641,7 +666,7 @@ jobs:
           flutter build apk --release \
             --obfuscate \
             --split-debug-info=build/debug-info \
-            --target-platform android-arm,android-arm64,android-x64
+            --target-platform android-arm64
           echo "APK Release selesai"
 
       - name: Build AAB Release
