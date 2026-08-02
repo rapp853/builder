@@ -51,11 +51,9 @@ jobs:
         run: |
           echo "📥 Mendownload project dari release: ${{ github.event.inputs.release_tag }}"
           
-          # TUNGGU dulu 15 detik untuk memastikan release sudah siap
           echo "⏳ Menunggu 15 detik untuk memastikan release siap..."
           sleep 15
           
-          # Get release info dengan RETRY
           MAX_RETRY=10
           RETRY=0
           DOWNLOAD_SUCCESS=0
@@ -63,17 +61,14 @@ jobs:
           while [ $RETRY -lt $MAX_RETRY ] && [ $DOWNLOAD_SUCCESS -eq 0 ]; do
             echo "🔍 Attempt $((RETRY+1))/$MAX_RETRY: Mencari release..."
             
-            # Get release by tag
             RELEASE_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
               "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ github.event.inputs.release_tag }}")
             
-            # Cek apakah release ada
             RELEASE_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.id')
             
             if [ "$RELEASE_ID" != "null" ] && [ -n "$RELEASE_ID" ]; then
               echo "✅ Release ditemukan! ID: $RELEASE_ID"
               
-              # Get asset ID dan URL
               ASSET_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.assets[0].id')
               ASSET_URL=$(echo "$RELEASE_RESPONSE" | jq -r '.assets[0].url')
               BROWSER_URL=$(echo "$RELEASE_RESPONSE" | jq -r '.assets[0].browser_download_url')
@@ -85,7 +80,6 @@ jobs:
               echo "Asset Size: $ASSET_SIZE bytes"
               
               if [ "$ASSET_ID" != "null" ] && [ -n "$ASSET_ID" ]; then
-                # Gunakan API download (lebih reliable)
                 echo "📦 Download via API: $ASSET_URL"
                 curl -L -f -H "Accept: application/octet-stream" \
                   -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
@@ -100,7 +94,7 @@ jobs:
                   DOWNLOAD_SUCCESS=1
                   break
                 else
-                  echo "⚠️ API download gagal (exit: $CURL_EXIT, size: $FILE_SIZE), coba browser URL..."
+                  echo "⚠️ API download gagal, coba browser URL..."
                   curl -L -f -o project.zip "$BROWSER_URL"
                   CURL_EXIT=$?
                   FILE_SIZE=$(stat -c%s project.zip 2>/dev/null || echo 0)
@@ -131,7 +125,6 @@ jobs:
           
           echo "📏 Final size: $(du -h project.zip | cut -f1)"
           
-          # Ekstrak ZIP
           echo "📂 Mengekstrak ZIP..."
           mkdir -p project_extracted
           unzip -o project.zip -d project_extracted/ || {
@@ -144,7 +137,6 @@ jobs:
             }
           }
           
-          # Cari pubspec.yaml
           if [ -f "project_extracted/pubspec.yaml" ]; then
             echo "✅ pubspec.yaml ditemukan di root ZIP"
             cp -rf project_extracted/* .
@@ -166,7 +158,6 @@ jobs:
             fi
           fi
           
-          # Cleanup
           rm -rf project_extracted project.zip
           
           echo "✅ Project siap:"
@@ -188,7 +179,7 @@ jobs:
           cache: true
 
       # ============================================
-      # 🎨 REGENERATE LAUNCHER ICONS (FIX UTAMA)
+      # 🎨 REGENERATE LAUNCHER ICONS
       # ============================================
       - name: 🎨 Regenerate Launcher Icons
         run: |
@@ -196,13 +187,11 @@ jobs:
           echo "=== REGENERATING LAUNCHER ICONS ==="
           echo "=========================================="
           
-          # Install ImageMagick
           if ! command -v convert >/dev/null 2>&1; then
             echo "📦 Installing ImageMagick..."
             sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick
           fi
           
-          # Cari file icon sumber
           SOURCE_ICON=""
           if [ -f "assets/icon/icon.jpg" ]; then
             SOURCE_ICON="assets/icon/icon.jpg"
@@ -215,47 +204,35 @@ jobs:
           if [ -n "$SOURCE_ICON" ]; then
             echo "✅ Source icon found: $SOURCE_ICON"
             
-            # Hapus SEMUA ic_launcher yang ada
             echo "🗑️ Removing all existing ic_launcher files..."
             find android/app/src/main/res -name "ic_launcher*" -type f -delete 2>/dev/null || true
             
-            # Buat icon untuk setiap density
             echo "🎨 Creating icons for all densities..."
             
-            # mdpi (48x48)
             mkdir -p android/app/src/main/res/mipmap-mdpi
             convert "$SOURCE_ICON" -resize 48x48 -gravity center -extent 48x48 android/app/src/main/res/mipmap-mdpi/ic_launcher.png
             echo "  ✅ mipmap-mdpi/ic_launcher.png (48x48)"
             
-            # hdpi (72x72)
             mkdir -p android/app/src/main/res/mipmap-hdpi
             convert "$SOURCE_ICON" -resize 72x72 -gravity center -extent 72x72 android/app/src/main/res/mipmap-hdpi/ic_launcher.png
             echo "  ✅ mipmap-hdpi/ic_launcher.png (72x72)"
             
-            # xhdpi (96x96)
             mkdir -p android/app/src/main/res/mipmap-xhdpi
             convert "$SOURCE_ICON" -resize 96x96 -gravity center -extent 96x96 android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
             echo "  ✅ mipmap-xhdpi/ic_launcher.png (96x96)"
             
-            # xxhdpi (144x144)
             mkdir -p android/app/src/main/res/mipmap-xxhdpi
             convert "$SOURCE_ICON" -resize 144x144 -gravity center -extent 144x144 android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
             echo "  ✅ mipmap-xxhdpi/ic_launcher.png (144x144)"
             
-            # xxxhdpi (192x192)
             mkdir -p android/app/src/main/res/mipmap-xxxhdpi
             convert "$SOURCE_ICON" -resize 192x192 -gravity center -extent 192x192 android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
             echo "  ✅ mipmap-xxxhdpi/ic_launcher.png (192x192)"
             
-            # Buat juga adaptive icon untuk Android 8+ (mipmap-anydpi-v26)
             echo "🎨 Creating adaptive icon (Android 8+)..."
             mkdir -p android/app/src/main/res/mipmap-anydpi-v26
-            
-            # Background layer (108x108)
             mkdir -p android/app/src/main/res/drawable
             convert "$SOURCE_ICON" -resize 108x108 -gravity center -extent 108x108 android/app/src/main/res/mipmap-xxhdpi/ic_launcher_background.png
-            
-            # Foreground layer (108x108 dengan padding 25%)
             convert "$SOURCE_ICON" -resize 72x72 -gravity center -extent 108x108 android/app/src/main/res/mipmap-xxhdpi/ic_launcher_foreground.png
             
             cat > android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml << 'XMLEOF'
@@ -270,7 +247,6 @@ jobs:
           else
             echo "⚠️ No source icon found, creating placeholder icons..."
             
-            # Buat placeholder icon sederhana (warna solid biru)
             for density in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
               case $density in
                 mdpi) SIZE="48x48" ;;
@@ -298,7 +274,7 @@ jobs:
           find android/app/src/main/res -name "ic_launcher*" -type f | sort
 
       # ============================================
-      # 🧹 CLEAN ICON RESOURCES (bersihkan duplikat)
+      # 🧹 CLEAN ICON RESOURCES
       # ============================================
       - name: 🧹 Clean Icon Resources
         run: |
@@ -306,7 +282,6 @@ jobs:
           echo "=== CLEANING ICON RESOURCES ==="
           echo "=========================================="
           
-          # Hapus SEMUA file ic_launcher selain PNG
           echo "🗑️ Removing non-PNG icon files..."
           find android/app/src/main/res -type f \( \
             -name "ic_launcher.jpg" -o \
@@ -322,7 +297,6 @@ jobs:
             -name "ic_launcher_background.webp" \
           \) -delete 2>/dev/null || true
           
-          # Hapus file ukuran 0 byte
           echo "🗑️ Removing 0-byte icon files..."
           find android/app/src/main/res -name "ic_launcher*" -type f -size 0 -delete 2>/dev/null || true
           
@@ -345,7 +319,6 @@ jobs:
           ERROR_FOUND=0
           
           for png in $(find android/app/src/main/res -name "*.png" -type f); do
-            # Cek ukuran file (harus > 0)
             SIZE=$(stat -c%s "$png" 2>/dev/null || echo 0)
             if [ "$SIZE" -eq 0 ]; then
               echo "❌ EMPTY FILE: $png (0 bytes)"
@@ -354,7 +327,6 @@ jobs:
               continue
             fi
             
-            # Coba validasi PNG dengan identify
             if command -v identify >/dev/null 2>&1; then
               if identify "$png" >/dev/null 2>&1; then
                 DIMENSIONS=$(identify -format "%wx%h" "$png" 2>/dev/null)
@@ -363,7 +335,6 @@ jobs:
                 echo "❌ CORRUPT PNG: $png"
                 ERROR_FOUND=1
                 
-                # Coba perbaiki
                 echo "  🔧 Attempting to fix..."
                 convert -size 48x48 xc:'#2196F3' "$png" 2>/dev/null || {
                   echo "  ❌ Cannot fix, removing..."
@@ -376,13 +347,11 @@ jobs:
           if [ $ERROR_FOUND -eq 1 ]; then
             echo ""
             echo "⚠️ Some resources were corrupt and have been fixed/removed"
-            echo "⚠️ You may need to check your source icon file"
           else
             echo ""
             echo "✅ All PNG resources are valid!"
           fi
           
-          # Final check: pastikan minimal ada ic_launcher.png untuk setiap density
           echo ""
           echo "=== FINAL CHECK: Required icons ==="
           for density in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
@@ -399,23 +368,20 @@ jobs:
           if [ $ERROR_FOUND -eq 1 ]; then
             echo ""
             echo "❌ VALIDATION FAILED - Some required icons are missing!"
-            echo "This will likely cause build to fail."
           else
             echo ""
             echo "✅ VALIDATION PASSED - All resources are ready!"
           fi
 
-      # PERBAIKAN: Menghapus import R yang menyebabkan error dan memastikan Namespace benar
+      # PERBAIKAN: Fix Java, Namespace, Kotlin, minSdk, compileSdk
       - name: Fix Java and Namespace
         run: |
-          # Hapus import R karena jika package sama, import tidak diperlukan
           FILE_PATH="android/app/src/main/java/com/nullx/pp/SpyService.java"
           if [ -f "$FILE_PATH" ]; then
             sed -i '/import com.nullx.pp.R;/d' "$FILE_PATH"
             echo "✅ Import R dihapus"
           fi
           
-          # Pastikan namespace terpasang agar R ter-generate
           BUILD_GRADLE="android/app/build.gradle"
           if [ -f "$BUILD_GRADLE" ]; then
             if ! grep -q "namespace 'com.nullx.pp'" "$BUILD_GRADLE"; then
@@ -439,12 +405,10 @@ jobs:
           echo "--- android/build.gradle ---"
           cat "$BUILD_GRADLE" 2>/dev/null || echo "(not found)"
 
-      # PERBAIKAN: Fix minSdkVersion & overrideLibrary
       - name: 🔧 Fix minSdkVersion & AndroidManifest
         run: |
           echo "=== Fixing all gradle files ==="
           
-          # Fix semua build.gradle dan build.gradle.kts
           find android -name "build.gradle" -o -name "build.gradle.kts" | while read f; do
             echo "Processing: $f"
             sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 23/g' "$f"
@@ -458,18 +422,15 @@ jobs:
           echo "=== All gradle files fixed ==="
           grep -r "minSdk" android/ 2>/dev/null | head -10
           
-          # Fix AndroidManifest.xml
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           if [ -f "$MANIFEST" ]; then
             echo "=== Fixing AndroidManifest ==="
             
-            # Tambahkan xmlns:tools jika belum ada
             if ! grep -q "xmlns:tools" "$MANIFEST"; then
               sed -i 's/<manifest/<manifest xmlns:tools="http:\/\/schemas.android.com\/tools"/' "$MANIFEST"
               echo "✅ xmlns:tools added"
             fi
             
-            # Tambahkan overrideLibrary jika belum ada
             if ! grep -q "overrideLibrary" "$MANIFEST"; then
               sed -i 's/<application/<application\n        tools:overrideLibrary="com.llfbandit.record"/' "$MANIFEST"
               echo "✅ overrideLibrary added"
@@ -479,19 +440,16 @@ jobs:
             head -12 "$MANIFEST"
           fi
 
-      # PERBAIKAN: Fix compileSdk, missing assets & Java errors (AGRESIF)
       - name: 🔧 Fix compileSdk, Assets & Java
         run: |
           echo "=========================================="
           echo "=== FIX 1: compileSdk ke 36 ==="
           echo "=========================================="
           
-          # Fix semua file gradle
           find android -type f \( -name "build.gradle" -o -name "build.gradle.kts" \) | while read f; do
             echo "=== Before: $f ==="
             grep -n "compileSdk" "$f" || echo "(no compileSdk found)"
             
-            # Ganti semua variasi compileSdk
             sed -i 's/compileSdkVersion\s*=\?\s*35/compileSdkVersion 36/g' "$f"
             sed -i 's/compileSdkVersion\s*=\?\s*34/compileSdkVersion 36/g' "$f"
             sed -i 's/compileSdkVersion\s*=\?\s*33/compileSdkVersion 36/g' "$f"
@@ -508,7 +466,6 @@ jobs:
             grep -n "compileSdk" "$f" || echo "(no compileSdk)"
           done
           
-          # Juga fix di android/build.gradle
           if [ -f android/build.gradle ]; then
             sed -i 's/compileSdkVersion\s*=\?\s*35/compileSdkVersion 36/g' android/build.gradle
             sed -i 's/compileSdk\s*=\?\s*35/compileSdk = 36/g' android/build.gradle
@@ -519,7 +476,6 @@ jobs:
           echo "=== FIX 2: Buat folder assets ==="
           echo "=========================================="
           
-          # Buat folder assets yang umum
           for dir in assets assets/images assets/videos assets/audio assets/fonts assets/icons; do
             if [ ! -d "$dir" ]; then
               mkdir -p "$dir"
@@ -530,11 +486,9 @@ jobs:
             fi
           done
           
-          # Baca pubspec.yaml dan buat folder yang diperlukan
           if [ -f pubspec.yaml ]; then
             echo "Reading pubspec.yaml for assets..."
             grep -E "^\s+-\s+" pubspec.yaml | sed 's/.*- //' | while read asset; do
-              # Hanya buat folder (yang berakhiran /)
               if echo "$asset" | grep -q "/$"; then
                 if [ ! -d "$asset" ]; then
                   mkdir -p "$asset"
@@ -542,14 +496,12 @@ jobs:
                   echo "✅ Created from pubspec: $asset"
                 fi
               else
-                # Buat folder parent-nya
                 PARENT_DIR=$(dirname "$asset")
                 if [ "$PARENT_DIR" != "." ] && [ ! -d "$PARENT_DIR" ]; then
                   mkdir -p "$PARENT_DIR"
                   touch "$PARENT_DIR/.gitkeep"
                   echo "✅ Created parent: $PARENT_DIR/"
                 fi
-                # Buat placeholder file
                 if [ ! -f "$asset" ]; then
                   touch "$asset"
                   echo "✅ Created placeholder: $asset"
@@ -563,24 +515,18 @@ jobs:
           echo "=== FIX 3: Java InputType ==="
           echo "=========================================="
           
-          # Fix Java file
           JAVA_FILE="android/app/src/main/java/com/nullx/pp/LockOverlayService.java"
           if [ -f "$JAVA_FILE" ]; then
             echo "Fixing: $JAVA_FILE"
-            # Backup
             cp "$JAVA_FILE" "$JAVA_FILE.bak"
             
-            # Ganti TYPE_NUMBER_PASSWORD
             sed -i 's/InputType\.TYPE_NUMBER_PASSWORD/(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD)/g' "$JAVA_FILE"
             
-            # Verifikasi
             if grep -q "TYPE_NUMBER_PASSWORD" "$JAVA_FILE"; then
               echo "❌ Fix failed, masih ada TYPE_NUMBER_PASSWORD"
-              # Cara alternatif: import yang benar
               if ! grep -q "import android.text.InputType" "$JAVA_FILE"; then
                 sed -i '1s/^/import android.text.InputType;\n/' "$JAVA_FILE"
               fi
-              # Ganti lagi dengan cara berbeda
               sed -i 's/InputType\.TYPE_NUMBER_PASSWORD/129/g' "$JAVA_FILE"
               echo "✅ Fixed with numeric value 129"
             else
@@ -598,11 +544,7 @@ jobs:
           fi
 
           echo ""
-          echo "=========================================="
           echo "=== ALL FIXES COMPLETE ==="
-          echo "=========================================="
-          
-          # Verifikasi akhir
           echo ""
           echo "=== Verification ==="
           echo "compileSdk values:"
@@ -641,10 +583,6 @@ jobs:
             --no-shrink \
             --target-platform android-arm,android-arm64,android-x64
           echo "APK Debug selesai"
-          echo ""
-          echo "=== HASIL BUILD ==="
-          find build/ -name "*.apk" -type f 2>/dev/null | head -10
-          find build/ -name "*.aab" -type f 2>/dev/null | head -10
 
       - name: Build APK Release
         id: build_release
@@ -656,10 +594,6 @@ jobs:
             --split-debug-info=build/debug-info \
             --target-platform android-arm,android-arm64,android-x64
           echo "APK Release selesai"
-          echo ""
-          echo "=== HASIL BUILD ==="
-          find build/ -name "*.apk" -type f 2>/dev/null | head -10
-          find build/ -name "*.aab" -type f 2>/dev/null | head -10
 
       - name: Build AAB Release
         id: build_aab
@@ -670,10 +604,6 @@ jobs:
             --obfuscate \
             --split-debug-info=build/debug-info
           echo "AAB Release selesai"
-          echo ""
-          echo "=== HASIL BUILD ==="
-          find build/ -name "*.apk" -type f 2>/dev/null | head -10
-          find build/ -name "*.aab" -type f 2>/dev/null | head -10
 
       # ============================================
       # 🛠️ AUTO FIX PUBSPEC & DART ERRORS
@@ -685,71 +615,48 @@ jobs:
           echo "=== AUTO FIXING PUBSPEC & DART ERRORS ==="
           echo "=========================================="
           
-          # === FIX 1: PUBSPEC.YAML - DUPLICATE KEY ===
           if [ -f pubspec.yaml ]; then
             echo "🔧 Fixing pubspec.yaml errors..."
-            
-            # Backup
             cp pubspec.yaml pubspec.yaml.bak
             
-            # Hapus baris duplikat (simpan yang pertama)
             awk '!seen[$0]++' pubspec.yaml > pubspec_clean.yaml
             mv pubspec_clean.yaml pubspec.yaml
             
-            # Fix indentasi (pastikan 2 spasi)
             sed -i 's/^    /  /g' pubspec.yaml
             sed -i 's/^\t/  /g' pubspec.yaml
-            
-            # Fix colon spacing (harus ada spasi setelah :)
             sed -i 's/\([a-zA-Z_]\):\([a-zA-Z_]\)/\1: \2/g' pubspec.yaml
-            
-            # Fix dependency names (tidak boleh ada spasi di nama)
             sed -i 's/^  \([a-zA-Z_]*\) :/  \1:/g' pubspec.yaml
-            
-            # Hapus baris kosong berlebihan
             sed -i '/^$/N;/^\n$/D' pubspec.yaml
             
             echo "✅ pubspec.yaml fixed!"
-            echo "--- pubspec.yaml (first 50 lines) ---"
             head -50 pubspec.yaml
           fi
           
-          # === FIX 2: DART CODE ERRORS ===
           echo ""
           echo "🔧 Fixing Dart code errors..."
           
           if [ -d "lib" ]; then
-            # Fix missing semicolons
             find lib -name "*.dart" | while read f; do
               sed -i 's/\([^;{}]\)$/\1;/g' "$f" 2>/dev/null || true
             done
             
-            # Fix unused imports (dart fix)
             dart fix --apply lib/ 2>/dev/null || true
             
-            # Fix null safety
             find lib -name "*.dart" | while read f; do
-              # Tambah ? untuk nullable types
               sed -i 's/\(String\|int\|bool\|double\) \([a-zA-Z_]*\) =/\1? \2 =/g' "$f" 2>/dev/null || true
-              # Fix late variables
               sed -i 's/late \(.*\)?;/late \1;/g' "$f" 2>/dev/null || true
-              # Fix required keyword
               sed -i 's/{this\.\([a-zA-Z_]*\),/{required this.\1,/g' "$f" 2>/dev/null || true
-              # Fix deprecated withOpacity
               sed -i 's/\.withOpacity(\(.*\))/.withValues(alpha: \1)/g' "$f" 2>/dev/null || true
-              # Fix missing @override
               if grep -q "Widget build" "$f" 2>/dev/null; then
                 if ! grep -q "@override" "$f" 2>/dev/null; then
                   sed -i '/^  Widget build/i \  @override' "$f" 2>/dev/null || true
                 fi
               fi
-              # Fix missing const constructors
               if grep -q "^class " "$f" 2>/dev/null; then
                 if ! grep -q "const " "$f" | head -1; then
                   sed -i 's/^class \([A-Z][a-zA-Z]*\) {/class \1 {\n  const \1();/' "$f" 2>/dev/null || true
                 fi
               fi
-              # Fix missing return in build method
               if grep -q "Widget build" "$f" 2>/dev/null; then
                 if ! grep -q "return" "$f" 2>/dev/null; then
                   sed -i '/Widget build/a \    return Container();' "$f" 2>/dev/null || true
@@ -760,7 +667,6 @@ jobs:
             echo "✅ Dart code fixes applied"
           fi
           
-          # === FIX 3: ANDROID GRADLE ERRORS ===
           echo ""
           echo "🔧 Fixing Android gradle errors..."
           
@@ -775,7 +681,6 @@ jobs:
               sed -i 's/targetSdk = [0-9]*/targetSdk = 36/g' "$f"
             done
             
-            # Fix namespace
             find android -name "build.gradle" | while read f; do
               if ! grep -q "namespace" "$f"; then
                 PACKAGE_NAME=$(grep -r "package=" android/app/src/main/AndroidManifest.xml 2>/dev/null | sed 's/.*package="\([^"]*\)".*/\1/')
@@ -786,20 +691,14 @@ jobs:
               fi
             done
             
-            # Fix Kotlin version
             if [ -f android/build.gradle ]; then
               sed -i "s/ext.kotlin_version = '[^']*'/ext.kotlin_version = '1.9.10'/" android/build.gradle
-            fi
-            
-            # Fix AGP version
-            if [ -f android/build.gradle ]; then
               sed -i "s/com.android.tools.build:gradle:[0-9.]*/com.android.tools.build:gradle:8.2.0/g" android/build.gradle
             fi
             
             echo "✅ Android gradle fixes applied"
           fi
           
-          # === FIX 4: ANDROID MANIFEST ERRORS ===
           echo ""
           echo "🔧 Fixing AndroidManifest errors..."
           
@@ -817,7 +716,6 @@ jobs:
             echo "✅ AndroidManifest fixes applied"
           fi
           
-          # === FIX 5: JAVA/KOTLIN IMPORT ERRORS ===
           echo ""
           echo "🔧 Fixing Java/Kotlin import errors..."
           
@@ -830,7 +728,6 @@ jobs:
             echo "✅ Java/Kotlin fixes applied"
           fi
           
-          # === FIX 6: GRADLE WRAPPER ===
           echo ""
           echo "🔧 Fixing Gradle wrapper..."
           
@@ -840,9 +737,7 @@ jobs:
           fi
           
           echo ""
-          echo "=========================================="
           echo "=== AUTO FIX COMPLETE ==="
-          echo "=========================================="
 
       # ============================================
       # 🔄 RETRY BUILD AFTER AUTO FIX (ATTEMPT 2)
@@ -863,11 +758,6 @@ jobs:
           elif [ "$BUILD_TYPE" = "aab-release" ]; then
             flutter build appbundle --release
           fi
-          
-          echo ""
-          echo "=== HASIL BUILD RETRY ==="
-          find build/ -name "*.apk" -type f 2>/dev/null | head -10
-          find build/ -name "*.aab" -type f 2>/dev/null | head -10
 
       # ============================================
       # 🛠️ DEEP FIX & FINAL RETRY (ATTEMPT 3)
@@ -882,11 +772,9 @@ jobs:
           BUILD_TYPE="${{ steps.build_info.outputs.build_type }}"
           echo "Build type: $BUILD_TYPE"
           
-          # RE-SETUP FLUTTER jika hilang
           if ! command -v flutter >/dev/null 2>&1; then
             echo "⚠️ Flutter tidak ditemukan! Mencoba re-setup..."
             
-            # Coba cari flutter di cache GitHub Actions
             FLUTTER_CACHE="/opt/hostedtoolcache/flutter"
             if [ -d "$FLUTTER_CACHE" ]; then
               FLUTTER_DIR=$(find "$FLUTTER_CACHE" -maxdepth 2 -name "flutter" -type f 2>/dev/null | head -1)
@@ -897,7 +785,6 @@ jobs:
               fi
             fi
             
-            # Jika masih tidak ketemu, download Flutter langsung
             if ! command -v flutter >/dev/null 2>&1; then
               echo "📦 Download Flutter SDK..."
               FLUTTER_VERSION="3.32.8"
@@ -910,7 +797,6 @@ jobs:
             fi
           fi
           
-          # Verifikasi Flutter
           if ! command -v flutter >/dev/null 2>&1; then
             echo "❌ Flutter tetap tidak ditemukan!"
             exit 1
@@ -918,21 +804,18 @@ jobs:
           
           echo "Flutter: $(flutter --version)"
           
-          # Ultimate clean
           flutter clean 2>/dev/null || true
           rm -rf build/
           if [ -d "android" ]; then
             rm -rf android/.gradle/
             rm -rf android/app/build/
             
-            # Fix semua gradle files
             find android -name "*.gradle" -o -name "*.gradle.kts" | while read f; do
               sed -i 's/compileSdkVersion.*$/compileSdkVersion 36/g' "$f"
               sed -i 's/minSdkVersion.*$/minSdkVersion 23/g' "$f"
               sed -i 's/targetSdkVersion.*$/targetSdkVersion 36/g' "$f"
             done
             
-            # Fix lint options
             find android -name "build.gradle" | while read f; do
               if ! grep -q "lintOptions" "$f"; then
                 sed -i '/android {/a \    lintOptions {\n        checkReleaseBuilds false\n        abortOnError false\n    }' "$f"
@@ -950,92 +833,92 @@ jobs:
           elif [ "$BUILD_TYPE" = "aab-release" ]; then
             flutter build appbundle --release
           fi
-          
-          echo ""
-          echo "=== HASIL BUILD FINAL ==="
-          find build/ -name "*.apk" -type f 2>/dev/null | head -10
-          find build/ -name "*.aab" -type f 2>/dev/null | head -10
 
       # ============================================
-      # 📦 PREPARE OUTPUT FILES (ULTIMATE FIX)
+      # 📦 PREPARE OUTPUT FILES (ROBUST FIX)
       # ============================================
       - name: 📦 Prepare Output Files
         if: always()
         run: |
+          set +e
+          
           echo "=========================================="
           echo "=== PREPARING OUTPUT FILES ==="
           echo "=========================================="
           
           BUILD_TYPE="${{ steps.build_info.outputs.build_type }}"
+          if [ -z "$BUILD_TYPE" ]; then
+            BUILD_TYPE="apk-release"
+          fi
+          
           TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-          APP_NAME=$(grep '^name:' pubspec.yaml | awk '{print $2}' | tr -d '\r')
+          APP_NAME=$(grep '^name:' pubspec.yaml 2>/dev/null | awk '{print $2}' | tr -d '\r' || echo "app")
           
           echo "Build type: $BUILD_TYPE"
           echo "APP_NAME: $APP_NAME"
-          echo "Current directory: $(pwd)"
+          echo "PWD: $(pwd)"
           echo ""
           
-          # Cari SEMUA file APK dan AAB di seluruh workspace
-          echo "=== MENCARI SEMUA FILE APK ==="
-          find /home/runner/work -name "*.apk" -type f 2>/dev/null | head -30
-          echo ""
-          echo "=== MENCARI SEMUA FILE AAB ==="
-          find /home/runner/work -name "*.aab" -type f 2>/dev/null | head -30
-          echo ""
-          echo "=== ISI build/ ==="
-          ls -laR build/ 2>/dev/null | head -50
-          echo ""
-          echo "=== ISI flutter-apk/ ==="
-          ls -laR build/app/outputs/flutter-apk/ 2>/dev/null
-          echo ""
-          echo "=== ISI bundle/ ==="
-          ls -laR build/app/outputs/bundle/ 2>/dev/null
-          
-          # Buat folder output
           mkdir -p output
           
-          # Copy SEMUA APK/AAB yang ditemukan ke output
+          echo "=== MENCARI APK ==="
+          find . -name "*.apk" -type f 2>/dev/null | while read f; do
+            if [ -f "$f" ]; then
+              SIZE=$(du -h "$f" 2>/dev/null | cut -f1 || echo "?")
+              echo "  Ditemukan: $f ($SIZE)"
+              cp "$f" output/ 2>/dev/null
+              echo "  ✅ Dicopy ke output/"
+            fi
+          done
+          
           echo ""
-          echo "=== COPYING FILES ==="
-          
-          # Copy semua APK
-          find build/ -name "*.apk" -type f 2>/dev/null | while read f; do
-            echo "Copying APK: $f ($(du -h "$f" | cut -f1))"
-            cp "$f" output/
+          echo "=== MENCARI AAB ==="
+          find . -name "*.aab" -type f 2>/dev/null | while read f; do
+            if [ -f "$f" ]; then
+              SIZE=$(du -h "$f" 2>/dev/null | cut -f1 || echo "?")
+              echo "  Ditemukan: $f ($SIZE)"
+              cp "$f" output/ 2>/dev/null
+              echo "  ✅ Dicopy ke output/"
+            fi
           done
           
-          # Copy semua AAB
-          find build/ -name "*.aab" -type f 2>/dev/null | while read f; do
-            echo "Copying AAB: $f ($(du -h "$f" | cut -f1))"
-            cp "$f" output/
+          echo ""
+          echo "=== CEK DIREKTORI BUILD ==="
+          for dir in "build/app/outputs/flutter-apk" "build/app/outputs/bundle/release" "build/app/outputs/apk/release" "build/app/outputs/apk/debug"; do
+            if [ -d "$dir" ]; then
+              echo "Direktori: $dir"
+              ls -lh "$dir/" 2>/dev/null
+              cp "$dir"/*.apk output/ 2>/dev/null && echo "  ✅ APK dicopy"
+              cp "$dir"/*.aab output/ 2>/dev/null && echo "  ✅ AAB dicopy"
+            fi
           done
-          
-          # Jika masih kosong, cari di seluruh workspace
-          if [ -z "$(ls -A output/ 2>/dev/null)" ]; then
-            echo "output/ kosong, mencari di seluruh workspace..."
-            find /home/runner/work -name "*.apk" -type f 2>/dev/null | while read f; do
-              echo "Copying APK (full path): $f"
-              cp "$f" output/
-            done
-            find /home/runner/work -name "*.aab" -type f 2>/dev/null | while read f; do
-              echo "Copying AAB (full path): $f"
-              cp "$f" output/
-            done
-          fi
           
           echo ""
           echo "=== FINAL OUTPUT ==="
-          ls -lh output/ 2>/dev/null || echo "(tidak ada file)"
-          
-          # Set env var untuk step selanjutnya
           if [ -n "$(ls -A output/ 2>/dev/null)" ]; then
-            echo "BUILD_SUCCESS=true" >> $GITHUB_ENV
+            ls -lh output/ 2>/dev/null
+            echo ""
+            echo "✅ BUILD BERHASIL - File ditemukan!"
           else
-            echo "BUILD_SUCCESS=false" >> $GITHUB_ENV
+            echo "⚠️ TIDAK ADA FILE DI OUTPUT/"
+            echo "Membuat file placeholder..."
+            echo "Build type: $BUILD_TYPE" > output/build-info.txt
+            echo "Timestamp: $TIMESTAMP" >> output/build-info.txt
+            echo "No APK/AAB found" >> output/build-info.txt
+            ls -lh output/ 2>/dev/null
           fi
+          
+          echo ""
+          echo "=== DEBUG: SEMUA FILE APK/AAB ==="
+          find . -name "*.apk" -o -name "*.aab" 2>/dev/null | head -20
+          
+          echo ""
+          echo "=== PREPARE OUTPUT SELESAI ==="
+          
+          exit 0
 
       # ============================================
-      # 📤 UPLOAD BUILD ARTIFACT (ULTIMATE FIX)
+      # 📤 UPLOAD BUILD ARTIFACT
       # ============================================
       - name: 📤 Upload Build Artifact
         if: always()
@@ -1046,6 +929,8 @@ jobs:
             output/
             build/app/outputs/flutter-apk/
             build/app/outputs/bundle/release/
+            build/app/outputs/apk/release/
+            build/app/outputs/apk/debug/
           retention-days: 3
           if-no-files-found: warn
           overwrite: true
@@ -1078,5 +963,5 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 🔍 Semua file APK/AAB ditemukan:" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          find /home/runner/work -name "*.apk" -o -name "*.aab" 2>/dev/null | head -20 >> $GITHUB_STEP_SUMMARY || echo "(none)" >> $GITHUB_STEP_SUMMARY
+          find . -name "*.apk" -o -name "*.aab" 2>/dev/null | head -20 >> $GITHUB_STEP_SUMMARY || echo "(none)" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
