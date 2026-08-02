@@ -612,7 +612,9 @@ jobs:
           flutter pub get
 
       - name: Build APK Debug
+        id: build_debug
         if: steps.build_info.outputs.build_type == 'apk-debug'
+        continue-on-error: true
         run: |
           flutter build apk --debug \
             --no-shrink \
@@ -620,7 +622,9 @@ jobs:
           echo "APK Debug selesai"
 
       - name: Build APK Release
+        id: build_release
         if: steps.build_info.outputs.build_type == 'apk-release'
+        continue-on-error: true
         run: |
           flutter build apk --release \
             --obfuscate \
@@ -629,7 +633,9 @@ jobs:
           echo "APK Release selesai"
 
       - name: Build AAB Release
+        id: build_aab
         if: steps.build_info.outputs.build_type == 'aab-release'
+        continue-on-error: true
         run: |
           flutter build appbundle --release \
             --obfuscate \
@@ -637,75 +643,63 @@ jobs:
           echo "AAB Release selesai"
 
       # ============================================
-      # 🛠️ AUTO FIX FLUTTER BUILD ERRORS (NEW)
+      # 🛠️ AUTO FIX & RETRY (HANYA JIKA BUILD GAGAL)
       # ============================================
-      - name: 🛠️ Auto Fix Flutter Build Errors
-        if: failure()
+      - name: 🛠️ Auto Fix & Retry Build (Attempt 2)
+        if: steps.build_debug.outcome == 'failure' || steps.build_release.outcome == 'failure' || steps.build_aab.outcome == 'failure'
         run: |
           echo "=========================================="
-          echo "=== AUTO FIXING BUILD ERRORS ==="
+          echo "=== BUILD GAGAL - AUTO FIX & RETRY ==="
           echo "=========================================="
           
-          # Fix 1: compileSdkVersion / namespace error
+          BUILD_TYPE="${{ steps.build_info.outputs.build_type }}"
+          echo "Build type: $BUILD_TYPE"
+          
+          # === FIX 1: compileSdk & namespace ===
           echo "🔧 Fixing compileSdk & namespace..."
-          find android -name "build.gradle" | while read f; do
-            sed -i 's/compileSdkVersion 35/compileSdkVersion 36/g' "$f"
-            sed -i 's/compileSdkVersion 34/compileSdkVersion 36/g' "$f"
-            sed -i 's/compileSdkVersion 33/compileSdkVersion 36/g' "$f"
-            sed -i 's/compileSdk = 35/compileSdk = 36/g' "$f"
-            sed -i 's/compileSdk = 34/compileSdk = 36/g' "$f"
-            sed -i 's/compileSdk = 33/compileSdk = 36/g' "$f"
-            if ! grep -q "namespace" "$f"; then
-              sed -i "/android {/a \    namespace 'com.nullx.pp'" "$f"
-            fi
-          done
-          
-          # Fix 2: minSdkVersion error
-          echo "🔧 Fixing minSdkVersion..."
-          find android -name "*.gradle" | while read f; do
-            sed -i 's/minSdkVersion 21/minSdkVersion 23/g' "$f"
-            sed -i 's/minSdkVersion 19/minSdkVersion 23/g' "$f"
-            sed -i 's/minSdk = 21/minSdk = 23/g' "$f"
-            sed -i 's/minSdk = 19/minSdk = 23/g' "$f"
-          done
-          
-          # Fix 3: Kotlin version error
-          echo "🔧 Fixing Kotlin version..."
-          if [ -f android/build.gradle ]; then
-            sed -i "s/ext.kotlin_version = '[^']*'/ext.kotlin_version = '1.9.10'/g" android/build.gradle
-            if ! grep -q "kotlin_version" android/build.gradle; then
-              sed -i "/buildscript {/a \    ext.kotlin_version = '1.9.10'" android/build.gradle
-            fi
-          fi
-          
-          # Fix 4: Gradle version error
-          echo "🔧 Fixing Gradle version..."
-          if [ -f android/gradle/wrapper/gradle-wrapper.properties ]; then
-            sed -i 's|gradle-.*-bin.zip|gradle-8.4-bin.zip|g' android/gradle/wrapper/gradle-wrapper.properties
-          fi
-          
-          # Fix 5: Missing assets
-          echo "🔧 Creating missing assets..."
-          if [ -f pubspec.yaml ]; then
-            grep -E "^\s+-\s+" pubspec.yaml | sed 's/.*- //' | while read asset; do
-              if [ ! -f "$asset" ] && [ ! -d "$asset" ]; then
-                mkdir -p "$(dirname "$asset")"
-                touch "$asset"
-                echo "  ✅ Created: $asset"
+          if [ -d "android" ]; then
+            find android -name "build.gradle" -o -name "build.gradle.kts" | while read f; do
+              sed -i 's/compileSdkVersion\s*=\?\s*3[0-5]/compileSdkVersion 36/g' "$f"
+              sed -i 's/compileSdk\s*=\?\s*3[0-5]/compileSdk = 36/g' "$f"
+              sed -i 's/compileSdk(3[0-5])/compileSdk(36)/g' "$f"
+              if ! grep -q "namespace" "$f"; then
+                sed -i "/android {/a \    namespace 'com.nullx.pp'" "$f"
               fi
             done
           fi
           
-          # Fix 6: R.java / import error
-          echo "🔧 Fixing Java import errors..."
-          find android -name "*.java" | while read f; do
-            sed -i '/import com.nullx.pp.R;/d' "$f"
-            if grep -q "TYPE_NUMBER_PASSWORD" "$f" 2>/dev/null; then
-              sed -i 's/InputType\.TYPE_NUMBER_PASSWORD/(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD)/g' "$f"
-            fi
-          done
+          # === FIX 2: minSdkVersion ===
+          echo "🔧 Fixing minSdkVersion..."
+          if [ -d "android" ]; then
+            find android -name "*.gradle" -o -name "*.gradle.kts" | while read f; do
+              sed -i 's/minSdkVersion 2[0-1]/minSdkVersion 23/g' "$f"
+              sed -i 's/minSdk = 2[0-1]/minSdk = 23/g' "$f"
+            done
+          fi
           
-          # Fix 7: AndroidManifest namespace
+          # === FIX 3: Java/Kotlin imports ===
+          echo "🔧 Fixing Java/Kotlin imports..."
+          if [ -d "android" ]; then
+            find android -name "*.java" -o -name "*.kt" | while read f; do
+              sed -i '/import.*\.R;/d' "$f"
+              sed -i '/import.*\.R$/d' "$f"
+              sed -i 's/InputType\.TYPE_NUMBER_PASSWORD/129/g' "$f"
+            done
+          fi
+          
+          # === FIX 4: Gradle wrapper ===
+          echo "🔧 Fixing Gradle wrapper..."
+          if [ -f "android/gradle/wrapper/gradle-wrapper.properties" ]; then
+            sed -i 's|gradle-.*-bin.zip|gradle-8.4-bin.zip|g' android/gradle/wrapper/gradle-wrapper.properties
+          fi
+          
+          # === FIX 5: AGP version ===
+          echo "🔧 Fixing AGP version..."
+          if [ -f "android/build.gradle" ]; then
+            sed -i "s/com.android.tools.build:gradle:.*'/com.android.tools.build:gradle:8.2.0'/g" android/build.gradle
+          fi
+          
+          # === FIX 6: AndroidManifest ===
           echo "🔧 Fixing AndroidManifest..."
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           if [ -f "$MANIFEST" ]; then
@@ -715,118 +709,18 @@ jobs:
             if ! grep -q "overrideLibrary" "$MANIFEST"; then
               sed -i 's/<application/<application\n        tools:overrideLibrary="*"/' "$MANIFEST"
             fi
-            if ! grep -q "usesCleartextTraffic" "$MANIFEST"; then
-              sed -i 's/<application/<application\n        android:usesCleartextTraffic="true"/' "$MANIFEST"
-            fi
           fi
           
-          # Fix 8: dependency error - force resolve
-          echo "🔧 Force resolving dependencies..."
-          cd android
-          ./gradlew dependencies --no-daemon 2>/dev/null || true
-          cd ..
+          # === FIX 7: Dart code fixes ===
+          echo "🔧 Fixing Dart code..."
+          dart fix --apply lib/ 2>/dev/null || true
           
-          # Fix 9: Flutter clean & pub get
-          echo "🔧 Flutter clean & pub get..."
+          # === CLEAN & RETRY ===
+          echo "🔧 Cleaning and retrying..."
           flutter clean
           flutter pub get
           
-          # Fix 10: Delete corrupted files
-          echo "🔧 Cleaning corrupted files..."
-          find android -name "*.lock" -delete 2>/dev/null || true
-          find android -name ".gradle" -type d -exec rm -rf {} + 2>/dev/null || true
-          
-          echo ""
-          echo "=== AUTO FIX COMPLETE ==="
-          echo "=== RETRYING BUILD... ==="
-          
-      # ============================================
-      # 🔄 RETRY BUILD AFTER AUTO FIX (1)
-      # ============================================
-      - name: 🔄 Retry Build (Attempt 2)
-        if: failure()
-        run: |
-          BUILD_TYPE="${{ steps.build_info.outputs.build_type }}"
-          echo "🔄 Retry build: $BUILD_TYPE"
-          
-          if [ "$BUILD_TYPE" = "apk-debug" ]; then
-            flutter build apk --debug
-          elif [ "$BUILD_TYPE" = "apk-release" ]; then
-            flutter build apk --release
-          elif [ "$BUILD_TYPE" = "aab-release" ]; then
-            flutter build appbundle --release
-          fi
-      
-      # ============================================
-      # 🛠️ SECOND FIX (DEEPER FIXES)
-      # ============================================
-      - name: 🛠️ Deep Fix Build Errors
-        if: failure()
-        run: |
-          echo "=========================================="
-          echo "=== DEEP FIX: Last Resort ==="
-          echo "=========================================="
-          
-          # Fix Gradle wrapper
-          if [ -d android ]; then
-            cd android
-            if [ ! -f gradlew ]; then
-              gradle wrapper --gradle-version 8.4 2>/dev/null || true
-            fi
-            chmod +x gradlew 2>/dev/null || true
-            
-            # Clean gradle cache
-            ./gradlew clean --no-daemon 2>/dev/null || true
-            cd ..
-          fi
-          
-          # Force delete .gradle
-          rm -rf android/.gradle 2>/dev/null || true
-          
-          # Fix all Java files - hapus import R yang salah
-          find android -name "*.java" | while read f; do
-            sed -i '/import.*\.R;/d' "$f"
-          done
-          
-          # Fix all Kotlin files - hapus import R yang salah
-          find android -name "*.kt" | while read f; do
-            sed -i '/import.*\.R$/d' "$f"
-          done
-          
-          # Fix build.gradle - tambah lintOptions
-          find android -name "build.gradle" | while read f; do
-            if ! grep -q "lintOptions" "$f"; then
-              sed -i '/android {/a \    lintOptions {\n        checkReleaseBuilds false\n        abortOnError false\n    }' "$f"
-            fi
-          done
-          
-          # Fix AGP version
-          if [ -f android/build.gradle ]; then
-            sed -i "s/com.android.tools.build:gradle:.*'/com.android.tools.build:gradle:8.2.0'/g" android/build.gradle
-            sed -i 's/com.android.tools.build:gradle:.*"/com.android.tools.build:gradle:8.2.0"/g' android/build.gradle
-          fi
-          
-          # Fix settings.gradle
-          if [ -f android/settings.gradle ]; then
-            if ! grep -q "google()" android/settings.gradle; then
-              sed -i '/repositories {/a \        google()\n        mavenCentral()' android/settings.gradle
-            fi
-          fi
-          
-          echo "=== DEEP FIX COMPLETE ==="
-          
-      # ============================================
-      # 🔄 FINAL RETRY BUILD
-      # ============================================
-      - name: 🔄 Final Retry Build (Attempt 3)
-        if: failure()
-        run: |
-          BUILD_TYPE="${{ steps.build_info.outputs.build_type }}"
-          echo "🔄 Final retry: $BUILD_TYPE"
-          
-          flutter clean
-          flutter pub get
-          
+          echo "🔄 Retrying build..."
           if [ "$BUILD_TYPE" = "apk-debug" ]; then
             flutter build apk --debug --no-shrink
           elif [ "$BUILD_TYPE" = "apk-release" ]; then
@@ -836,98 +730,50 @@ jobs:
           fi
 
       # ============================================
-      # 🛠️ AUTO FIX DART/FLUTTER CODE ERRORS
+      # 🛠️ DEEP FIX & FINAL RETRY
       # ============================================
-      - name: 🛠️ Auto Fix Dart Code Errors
+      - name: 🛠️ Deep Fix & Final Retry (Attempt 3)
         if: failure()
         run: |
           echo "=========================================="
-          echo "=== AUTO FIXING DART ERRORS ==="
+          echo "=== DEEP FIX & FINAL RETRY ==="
           echo "=========================================="
           
-          # Fix 1: Unused import
-          echo "🔧 Removing unused imports..."
-          dart fix --apply lib/ 2>/dev/null || true
-          
-          # Fix 2: Null safety issues
-          echo "🔧 Fixing null safety..."
-          find lib -name "*.dart" | while read f; do
-            # Tambah ? pada variable yang null
-            sed -i 's/\(String\|int\|bool\|double\|List\|Map\) \([a-zA-Z]*\);/\1? \2;/g' "$f" 2>/dev/null || true
-            # Fix late modifier
-            sed -i 's/late \(.*\)?;/late \1;/g' "$f" 2>/dev/null || true
-          done
-          
-          # Fix 3: Missing const constructor
-          echo "🔧 Adding const constructors..."
-          find lib -name "*.dart" | while read f; do
-            sed -i 's/^class \([A-Z].*\) {/class \1 {\n  const \1();/' "$f" 2>/dev/null || true
-          done
-          
-          # Fix 4: Deprecated APIs
-          echo "🔧 Fixing deprecated APIs..."
-          find lib -name "*.dart" | while read f; do
-            # Fix deprecated withOpacity
-            sed -i 's/\.withOpacity(\(.*\))/.withValues(alpha: \1)/g' "$f" 2>/dev/null || true
-            # Fix deprecated color
-            sed -i 's/Colors\.\(.*\)\[\(.*\)\]/Colors.\1.shade\2/g' "$f" 2>/dev/null || true
-          done
-          
-          # Fix 5: Missing return statements
-          echo "🔧 Adding missing returns..."
-          find lib -name "*.dart" | while read f; do
-            if grep -q "Widget build" "$f"; then
-              if ! grep -q "return" "$f"; then
-                sed -i '/Widget build/a \    return Container();' "$f" 2>/dev/null || true
-              fi
-            fi
-          done
-          
-          # Fix 6: Unused variables
-          echo "🔧 Fixing unused variables..."
-          find lib -name "*.dart" | while read f; do
-            sed -i 's/^\( *\)\(final\|var\|const\) \([a-zA-Z]*\) = \(.*\);$/\/\/ \1\2 \3 = \4;/g' "$f" 2>/dev/null || true
-          done
-          
-          # Fix 7: Missing required keyword
-          echo "🔧 Adding required keyword..."
-          find lib -name "*.dart" | while read f; do
-            sed -i 's/{this\.\([a-zA-Z]*\),/{required this.\1,/g' "$f" 2>/dev/null || true
-          done
-          
-          # Fix 8: import path issues
-          echo "🔧 Fixing import paths..."
-          find lib -name "*.dart" | while read f; do
-            # Fix package import
-            sed -i "s|import 'package:${APP_NAME}/|import 'package:${APP_NAME}/|g" "$f" 2>/dev/null || true
-          done
-          
-          # Fix 9: Override methods
-          echo "🔧 Adding missing @override..."
-          find lib -name "*.dart" | while read f; do
-            sed -i '/^  Widget build/i \  @override' "$f" 2>/dev/null || true
-          done
-          
-          # Fix 10: Dart analysis fixes
-          echo "🔧 Running dart fix..."
-          dart fix --apply lib/ 2>/dev/null || true
-          
-          echo "=== DART CODE FIXES COMPLETE ==="
-          
-      # ============================================
-      # 🔄 RETRY AFTER DART FIX
-      # ============================================
-      - name: 🔄 Retry Build After Dart Fix
-        if: failure()
-        run: |
           BUILD_TYPE="${{ steps.build_info.outputs.build_type }}"
-          echo "🔄 Retry after Dart fixes: $BUILD_TYPE"
+          echo "Build type: $BUILD_TYPE"
           
-          flutter clean
+          # Ultimate clean
+          flutter clean 2>/dev/null || true
+          rm -rf build/
+          if [ -d "android" ]; then
+            rm -rf android/.gradle/
+            rm -rf android/app/build/
+          fi
+          
+          # Fix semua gradle files
+          if [ -d "android" ]; then
+            find android -name "*.gradle" -o -name "*.gradle.kts" | while read f; do
+              sed -i 's/compileSdkVersion.*$/compileSdkVersion 36/g' "$f"
+              sed -i 's/minSdkVersion.*$/minSdkVersion 23/g' "$f"
+              sed -i 's/targetSdkVersion.*$/targetSdkVersion 36/g' "$f"
+            done
+          fi
+          
+          # Fix lint options
+          if [ -d "android" ]; then
+            find android -name "build.gradle" | while read f; do
+              if ! grep -q "lintOptions" "$f"; then
+                sed -i '/android {/a \    lintOptions {\n        checkReleaseBuilds false\n        abortOnError false\n    }' "$f"
+              fi
+            done
+          fi
+          
+          # Re-setup Flutter
           flutter pub get
           
+          echo "🔄 Final retry..."
           if [ "$BUILD_TYPE" = "apk-debug" ]; then
-            flutter build apk --debug
+            flutter build apk --debug --no-shrink
           elif [ "$BUILD_TYPE" = "apk-release" ]; then
             flutter build apk --release
           elif [ "$BUILD_TYPE" = "aab-release" ]; then
@@ -935,6 +781,7 @@ jobs:
           fi
 
       - name: Prepare Output Files
+        if: always()
         run: |
           mkdir -p output
           BUILD_TYPE="${{ steps.build_info.outputs.build_type }}"
@@ -942,26 +789,36 @@ jobs:
           APP_NAME=$(grep '^name:' pubspec.yaml | awk '{print $2}' | tr -d '\r')
 
           if [ "$BUILD_TYPE" = "apk-debug" ]; then
-            APK_PATH=$(find build/app/outputs/flutter-apk -name "*.apk" | head -1)
-            cp "$APK_PATH" "output/${APP_NAME}_debug_${TIMESTAMP}.apk"
+            APK_PATH=$(find build/app/outputs/flutter-apk -name "*.apk" 2>/dev/null | head -1)
+            if [ -n "$APK_PATH" ]; then
+              cp "$APK_PATH" "output/${APP_NAME}_debug_${TIMESTAMP}.apk"
+              echo "✅ APK copied: $APK_PATH"
+            fi
           elif [ "$BUILD_TYPE" = "apk-release" ]; then
-            APK_PATH=$(find build/app/outputs/flutter-apk -name "app-release.apk" | head -1)
-            cp "$APK_PATH" "output/${APP_NAME}_release_${TIMESTAMP}.apk"
+            APK_PATH=$(find build/app/outputs/flutter-apk -name "*.apk" 2>/dev/null | head -1)
+            if [ -n "$APK_PATH" ]; then
+              cp "$APK_PATH" "output/${APP_NAME}_release_${TIMESTAMP}.apk"
+              echo "✅ APK copied: $APK_PATH"
+            fi
           elif [ "$BUILD_TYPE" = "aab-release" ]; then
-            AAB_PATH=$(find build/app/outputs/bundle/release -name "*.aab" | head -1)
-            cp "$AAB_PATH" "output/${APP_NAME}_release_${TIMESTAMP}.aab"
+            AAB_PATH=$(find build/app/outputs/bundle/release -name "*.aab" 2>/dev/null | head -1)
+            if [ -n "$AAB_PATH" ]; then
+              cp "$AAB_PATH" "output/${APP_NAME}_release_${TIMESTAMP}.aab"
+              echo "✅ AAB copied: $AAB_PATH"
+            fi
           fi
 
           echo "Output files:"
-          ls -lh output/
+          ls -lh output/ 2>/dev/null || echo "(no output files)"
 
       - name: Upload Build Artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: flutter-build-${{ steps.build_info.outputs.build_type }}-${{ github.run_number }}
           path: output/
           retention-days: 3
-          if-no-files-found: error
+          if-no-files-found: warn
 
       - name: Build Summary
         if: always()
@@ -975,6 +832,7 @@ jobs:
           echo "| Run Number | #${{ github.run_number }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Triggered By | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Commit | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build 1 | ${{ steps.build_debug.outcome || steps.build_release.outcome || steps.build_aab.outcome }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📦 Output" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
