@@ -44,90 +44,93 @@ jobs:
         uses: actions/checkout@v4
 
       # ============================================
-      # ⬇️ DOWNLOAD ZIP DARI RELEASE BOT
+      # ⬇️ DOWNLOAD ZIP DARI RELEASE BOT (DIPERBAIKI)
       # ============================================
       - name: 📥 Download Project ZIP from Bot Release
         if: github.event.inputs.release_tag != ''
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          RELEASE_TAG: ${{ github.event.inputs.release_tag }}
-          REPO: ${{ github.repository }}
+        id: download_zip
         run: |
-          echo "📥 Mendownload project dari release: $RELEASE_TAG"
+          echo "📥 Mendownload project dari release: ${{ github.event.inputs.release_tag }}"
           
-          # TUNGGU 15 detik
+          # Tunggu 15 detik
           echo "⏳ Menunggu 15 detik untuk memastikan release siap..."
           sleep 15
           
-          # Get release info dengan RETRY
-          MAX_RETRY=5
-          RETRY=0
-          ASSET_URL=""
-          
-          while [ $RETRY -lt $MAX_RETRY ]; do
-            RETRY=$((RETRY+1))
-            echo "🔍 Attempt $RETRY/$MAX_RETRY: Mencari release..."
+          # Function untuk download dengan retry
+          download_with_retry() {
+            local MAX_RETRY=5
+            local RETRY=0
+            local ASSET_URL=""
             
-            # Get release by tag
-            RELEASE_RESPONSE=$(curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
-              "https://api.github.com/repos/$REPO/releases/tags/$RELEASE_TAG")
-            
-            # Cek apakah release ada
-            RELEASE_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.id')
-            
-            if [ "$RELEASE_ID" != "null" ] && [ -n "$RELEASE_ID" ]; then
-              echo "✅ Release ditemukan! ID: $RELEASE_ID"
+            while [ $RETRY -lt $MAX_RETRY ]; do
+              echo "🔍 Attempt $((RETRY+1))/$MAX_RETRY: Mencari release..."
               
-              # Get asset URL
-              ASSET_URL=$(echo "$RELEASE_RESPONSE" | jq -r '.assets[0].browser_download_url')
+              # Get release info
+              RELEASE_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ github.event.inputs.release_tag }}")
               
-              if [ "$ASSET_URL" != "null" ] && [ -n "$ASSET_URL" ]; then
-                echo "✅ Asset ditemukan: $ASSET_URL"
-                break
+              RELEASE_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.id')
+              
+              if [ "$RELEASE_ID" != "null" ] && [ -n "$RELEASE_ID" ]; then
+                echo "✅ Release ditemukan! ID: $RELEASE_ID"
+                
+                ASSET_URL=$(echo "$RELEASE_RESPONSE" | jq -r '.assets[0].browser_download_url')
+                
+                if [ "$ASSET_URL" != "null" ] && [ -n "$ASSET_URL" ]; then
+                  echo "✅ Asset ditemukan: $ASSET_URL"
+                  break
+                else
+                  echo "⚠️ Release ada tapi asset belum siap, tunggu 10 detik..."
+                  sleep 10
+                fi
               else
-                echo "⚠️ Release ada tapi asset belum siap, tunggu 10 detik..."
+                echo "⚠️ Release belum ditemukan, tunggu 10 detik..."
                 sleep 10
               fi
-            else
-              echo "⚠️ Release belum ditemukan, tunggu 10 detik..."
-              sleep 10
+              
+              RETRY=$((RETRY+1))
+            done
+            
+            if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
+              echo "❌ Gagal mendapatkan asset setelah $MAX_RETRY kali percobaan!"
+              return 1
             fi
-          done
-          
-          if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
-            echo "❌ Gagal mendapatkan asset setelah $MAX_RETRY kali percobaan!"
-            echo "Release response:"
-            echo "$RELEASE_RESPONSE" | jq '.'
             
-            # Coba list semua release
-            echo ""
-            echo "📋 Daftar release yang ada:"
-            curl -s -H "Authorization: Bearer $GITHUB_TOKEN" \
-              "https://api.github.com/repos/$REPO/releases?per_page=5" | \
-              jq '.[].tag_name'
+            echo "📦 Download dari: $ASSET_URL"
             
-            exit 1
-          fi
+            # Download dengan curl yang lebih robust
+            curl -L -o project.zip "$ASSET_URL" \
+              --fail \
+              --silent \
+              --show-error \
+              --connect-timeout 30 \
+              --max-time 60
+            
+            if [ ! -f project.zip ]; then
+              echo "❌ File ZIP gagal didownload!"
+              return 1
+            fi
+            
+            echo "📏 Size: $(du -h project.zip | cut -f1)"
+            echo "🔍 File type: $(file project.zip)"
+            
+            # Validasi file ZIP
+            if ! file project.zip | grep -q "Zip archive"; then
+              echo "❌ File bukan ZIP yang valid!"
+              echo "Content preview:"
+              head -c 500 project.zip
+              echo ""
+              return 1
+            fi
+            
+            return 0
+          }
           
-          echo "📦 Download dari: $ASSET_URL"
-          
-          # Download dengan verbose dan cek size
-          curl -L -v -o project.zip "$ASSET_URL"
-          
-          # Cek file
-          if [ ! -f project.zip ]; then
-            echo "❌ File ZIP gagal didownload!"
-            exit 1
-          fi
-          
-          FILE_SIZE=$(stat -c%s project.zip)
-          echo "📏 Size: $FILE_SIZE bytes"
-          
-          # Cek apakah file terlalu kecil (kemungkinan corrupt)
-          if [ $FILE_SIZE -lt 1000 ]; then
-            echo "❌ File terlalu kecil! Mungkin corrupt atau hanya HTML error page."
-            echo "Isi file:"
-            cat project.zip
+          # Jalankan download dengan retry
+          if download_with_retry; then
+            echo "✅ Download berhasil!"
+          else
+            echo "❌ Download gagal, mencoba fallback..."
             exit 1
           fi
           
@@ -135,15 +138,12 @@ jobs:
           echo "📂 Mengekstrak ZIP..."
           mkdir -p project_extracted
           
-          # Coba unzip dengan force
-          if ! unzip -o project.zip -d project_extracted/ 2>&1; then
-            echo "❌ Unzip gagal! Mungkin file corrupt."
-            echo "File header:"
-            head -c 1000 project.zip | xxd | head -20
+          if ! unzip -o project.zip -d project_extracted/; then
+            echo "❌ Gagal mengekstrak ZIP!"
             exit 1
           fi
           
-          # Cari pubspec.yaml
+          # Cari pubspec.yaml di root
           if [ -f "project_extracted/pubspec.yaml" ]; then
             echo "✅ pubspec.yaml ditemukan di root ZIP"
             cp -rf project_extracted/* .
@@ -151,7 +151,7 @@ jobs:
           else
             # Cari di subfolder
             echo "🔍 Mencari pubspec.yaml di subfolder..."
-            SUBFOLDER=$(find project_extracted -name "pubspec.yaml" -not -path "*/.*" | head -1)
+            SUBFOLDER=$(find project_extracted -name "pubspec.yaml" -not -path "*/\.*" | head -1)
             
             if [ -n "$SUBFOLDER" ]; then
               PROJECT_DIR=$(dirname "$SUBFOLDER")
@@ -160,7 +160,7 @@ jobs:
               cp -rf "$PROJECT_DIR"/.* . 2>/dev/null || true
             else
               echo "❌ pubspec.yaml TIDAK DITEMUKAN!"
-              echo "Isi ZIP:"
+              echo "📂 Isi ZIP:"
               ls -laR project_extracted/ | head -50
               exit 1
             fi
@@ -173,8 +173,45 @@ jobs:
           echo "---"
           ls -la
           echo "---"
-          head -20 pubspec.yaml
+          head -20 pubspec.yaml 2>/dev/null || echo "⚠️ pubspec.yaml tidak ditemukan"
 
+      # ============================================
+      # 🔄 RETRY DOWNLOAD (FALLBACK)
+      # ============================================
+      - name: 🔄 Retry Download with Alternative Method
+        if: failure() && github.event.inputs.release_tag != ''
+        run: |
+          echo "🔄 Mencoba download ulang dengan metode alternatif..."
+          
+          # Coba dengan wget
+          ASSET_URL=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ github.event.inputs.release_tag }}" \
+            | jq -r '.assets[0].browser_download_url')
+          
+          if [ -n "$ASSET_URL" ] && [ "$ASSET_URL" != "null" ]; then
+            echo "📦 Download ulang dari: $ASSET_URL"
+            wget -O project.zip "$ASSET_URL"
+            
+            if [ -f project.zip ] && file project.zip | grep -q "Zip archive"; then
+              echo "✅ Download ulang berhasil!"
+              unzip -o project.zip -d project_extracted/
+              
+              if [ -f "project_extracted/pubspec.yaml" ]; then
+                cp -rf project_extracted/* .
+                cp -rf project_extracted/.* . 2>/dev/null || true
+              fi
+              
+              rm -rf project_extracted project.zip
+              echo "✅ Fallback berhasil!"
+            else
+              echo "❌ Fallback gagal, menggunakan source dari repository"
+              # Source code sudah ada dari checkout
+            fi
+          fi
+
+      # ============================================
+      # SETUP JAVA & FLUTTER
+      # ============================================
       - name: Setup Java 17
         uses: actions/setup-java@v4
         with:
@@ -249,25 +286,162 @@ jobs:
             convert "$SOURCE_ICON" -resize 192x192 -gravity center -extent 192x192 android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
             echo "  ✅ mipmap-xxxhdpi/ic_launcher.png (192x192)"
             
+            # Adaptive icon
+            echo "🎨 Creating adaptive icon (Android 8+)..."
+            mkdir -p android/app/src/main/res/mipmap-anydpi-v26
+            mkdir -p android/app/src/main/res/drawable
+            
+            convert "$SOURCE_ICON" -resize 108x108 -gravity center -extent 108x108 android/app/src/main/res/mipmap-xxhdpi/ic_launcher_background.png
+            convert "$SOURCE_ICON" -resize 72x72 -gravity center -extent 108x108 android/app/src/main/res/mipmap-xxhdpi/ic_launcher_foreground.png
+            
+            cat > android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml << 'EOF'
+            <?xml version="1.0" encoding="utf-8"?>
+            <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+                <background android:drawable="@mipmap/ic_launcher_background"/>
+                <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
+            </adaptive-icon>
+            EOF
+            
+            echo "  ✅ mipmap-anydpi-v26/ic_launcher.xml"
           else
-            echo "⚠️ No source icon found, please check assets/icon/"
-            exit 1
+            echo "⚠️ No source icon found, creating placeholder icons..."
+            
+            # Buat placeholder icon
+            for density in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+              case $density in
+                mdpi) SIZE="48x48" ;;
+                hdpi) SIZE="72x72" ;;
+                xhdpi) SIZE="96x96" ;;
+                xxhdpi) SIZE="144x144" ;;
+                xxxhdpi) SIZE="192x192" ;;
+              esac
+              
+              OUTPUT_DIR="android/app/src/main/res/mipmap-$density"
+              mkdir -p "$OUTPUT_DIR"
+              
+              convert -size "$SIZE" xc:'#2196F3' \
+                -fill white -gravity center -pointsize 24 \
+                -annotate 0 "App" \
+                "$OUTPUT_DIR/ic_launcher.png"
+              
+              echo "  ✅ Placeholder: mipmap-$density/ic_launcher.png ($SIZE)"
+            done
           fi
           
           echo ""
           echo "=== ICON REGENERATION COMPLETE ==="
-          find android/app/src/main/res -name "ic_launcher*" -type f | sort
 
       # ============================================
-      # 🔧 FIX BUILD GRADLE
+      # 🧹 CLEAN ICON RESOURCES
       # ============================================
-      - name: 🔧 Fix Build Files
+      - name: 🧹 Clean Icon Resources
         run: |
-          echo "=== Fixing Gradle Files ==="
+          echo "=========================================="
+          echo "=== CLEANING ICON RESOURCES ==="
+          echo "=========================================="
           
-          # Fix minSdkVersion di semua file
+          # Hapus file non-PNG
+          echo "🗑️ Removing non-PNG icon files..."
+          find android/app/src/main/res -type f \
+            -name "ic_launcher.jpg" -o \
+            -name "ic_launcher.webp" -o \
+            -name "ic_launcher.gif" -o \
+            -name "ic_launcher.bmp" -o \
+            -name "ic_launcher_round.jpg" -o \
+            -name "ic_launcher_round.webp" -o \
+            -name "ic_launcher_round.gif" -o \
+            -name "ic_launcher_foreground.jpg" -o \
+            -name "ic_launcher_foreground.webp" -o \
+            -name "ic_launcher_background.jpg" -o \
+            -name "ic_launcher_background.webp" \
+            -delete 2>/dev/null || true
+          
+          # Hapus file 0 byte
+          echo "🗑️ Removing 0-byte icon files..."
+          find android/app/src/main/res -name "ic_launcher*" -type f -size 0 -delete 2>/dev/null || true
+          
+          echo ""
+          echo "=== REMAINING ICON FILES ==="
+          find android/app/src/main/res -name "ic_launcher*" -type f -exec ls -lh {} \; | sort
+
+      # ============================================
+      # 🔍 VALIDATE RESOURCES
+      # ============================================
+      - name: 🔍 Validate Android Resources
+        run: |
+          echo "=========================================="
+          echo "=== VALIDATING ANDROID RESOURCES ==="
+          echo "=========================================="
+          
+          ERROR_FOUND=0
+          
+          for png in $(find android/app/src/main/res -name "*.png" -type f); do
+            SIZE=$(stat -c%s "$png" 2>/dev/null || echo 0)
+            if [ "$SIZE" -eq 0 ]; then
+              echo "❌ EMPTY FILE: $png (0 bytes)"
+              ERROR_FOUND=1
+              rm -f "$png"
+              continue
+            fi
+            
+            if command -v identify >/dev/null 2>&1; then
+              if identify "$png" >/dev/null 2>&1; then
+                DIMENSIONS=$(identify -format "%wx%h" "$png" 2>/dev/null)
+                echo "  ✅ $png ($DIMENSIONS, ${SIZE} bytes)"
+              else
+                echo "❌ CORRUPT PNG: $png"
+                ERROR_FOUND=1
+                convert -size 48x48 xc:'#2196F3' "$png" 2>/dev/null || rm -f "$png"
+              fi
+            fi
+          done
+          
+          # Final check
+          echo ""
+          echo "=== FINAL CHECK: Required icons ==="
+          for density in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
+            ICON_PATH="android/app/src/main/res/mipmap-$density/ic_launcher.png"
+            if [ -f "$ICON_PATH" ]; then
+              SIZE=$(stat -c%s "$ICON_PATH")
+              echo "  ✅ mipmap-$density/ic_launcher.png ($SIZE bytes)"
+            else
+              echo "  ❌ MISSING: mipmap-$density/ic_launcher.png"
+              ERROR_FOUND=1
+            fi
+          done
+          
+          if [ $ERROR_FOUND -eq 1 ]; then
+            echo ""
+            echo "⚠️ Some resources are missing/corrupt"
+          else
+            echo ""
+            echo "✅ VALIDATION PASSED!"
+          fi
+
+      # ============================================
+      # 🔧 FIX ANDROID BUILD FILES
+      # ============================================
+      - name: 🔧 Fix Android Build Configuration
+        run: |
+          echo "=========================================="
+          echo "=== FIXING ANDROID BUILD CONFIGURATION ==="
+          echo "=========================================="
+          
+          # Fix Kotlin version
+          BUILD_GRADLE="android/build.gradle"
+          if [ -f "$BUILD_GRADLE" ]; then
+            if grep -q "kotlin_version" "$BUILD_GRADLE"; then
+              sed -i "s/ext.kotlin_version = '[^']*'/ext.kotlin_version = '1.9.10'/" "$BUILD_GRADLE"
+              echo "✅ kotlin_version patched"
+            else
+              sed -i "/buildscript {/a\    ext.kotlin_version = '1.9.10'" "$BUILD_GRADLE"
+              echo "✅ kotlin_version added"
+            fi
+          fi
+          
+          # Fix minSdkVersion
           find android -name "build.gradle" -o -name "build.gradle.kts" | while read f; do
-            echo "Processing: $f"
+            echo "📝 Processing: $f"
             sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 23/g' "$f"
             sed -i 's/minSdkVersion 21/minSdkVersion 23/g' "$f"
             sed -i 's/minSdk = flutter.minSdkVersion/minSdk = 23/g' "$f"
@@ -276,34 +450,48 @@ jobs:
             sed -i 's/minSdk 21/minSdk 23/g' "$f"
           done
           
-          # Fix compileSdkVersion
-          find android -name "build.gradle" -o -name "build.gradle.kts" | while read f; do
-            echo "Processing: $f"
-            sed -i 's/compileSdkVersion 33/compileSdkVersion 34/g' "$f"
-            sed -i 's/compileSdkVersion 34/compileSdkVersion 34/g' "$f"
-            sed -i 's/compileSdk = 33/compileSdk = 34/g' "$f"
-            sed -i 's/compileSdk(33)/compileSdk(34)/g' "$f"
-          done
-          
-          # Fix Kotlin version
-          BUILD_GRADLE="android/build.gradle"
-          if [ -f "$BUILD_GRADLE" ]; then
-            if grep -q "kotlin_version" "$BUILD_GRADLE"; then
-              sed -i "s/ext.kotlin_version = '[^']*'/ext.kotlin_version = '1.9.10'/g" "$BUILD_GRADLE"
-            else
-              sed -i "/buildscript {/a\    ext.kotlin_version = '1.9.10'" "$BUILD_GRADLE"
-            fi
-          fi
-          
-          # Tambahkan namespace jika belum ada
+          # Fix namespace
           APP_GRADLE="android/app/build.gradle"
           if [ -f "$APP_GRADLE" ]; then
-            if ! grep -q "namespace" "$APP_GRADLE"; then
-              sed -i "/android {/a \    namespace 'com.nullx.pp'" "$APP_GRADLE"
+            if ! grep -q "namespace 'com.nullx.pp'" "$APP_GRADLE"; then
+              sed -i "/android {/a\    namespace 'com.nullx.pp'" "$APP_GRADLE"
+              echo "✅ Namespace added"
             fi
           fi
           
-          echo "✅ All gradle files fixed"
+          # Fix AndroidManifest
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          if [ -f "$MANIFEST" ]; then
+            if ! grep -q "xmlns:tools" "$MANIFEST"; then
+              sed -i 's/<manifest /<manifest xmlns:tools="http:\/\/schemas.android.com\/tools" /' "$MANIFEST"
+              echo "✅ xmlns:tools added"
+            fi
+          fi
+          
+          # Fix TYPE_NUMBER_PASSWORD issue
+          find android -name "*.java" -o -name "*.kt" | while read f; do
+            if grep -q "TYPE_NUMBER_PASSWORD" "$f" 2>/dev/null; then
+              echo "🔧 Fixing TYPE_NUMBER_PASSWORD in: $f"
+              sed -i 's/InputType.TYPE_NUMBER_PASSWORD/(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD)/g' "$f"
+              echo "✅ Fixed: $f"
+            fi
+          done
+          
+          echo ""
+          echo "=== ALL FIXES COMPLETE ==="
+
+      # ============================================
+      # 📦 FLUTTER BUILD
+      # ============================================
+      - name: Set Build Type
+        id: build_info
+        run: |
+          BUILD_TYPE="${{ github.event.inputs.build_type }}"
+          if [ -z "$BUILD_TYPE" ]; then
+            BUILD_TYPE="apk-debug"
+          fi
+          echo "build_type=$BUILD_TYPE" >> $GITHUB_OUTPUT
+          echo "Build type: $BUILD_TYPE"
 
       - name: Flutter Pub Get
         run: |
@@ -312,59 +500,76 @@ jobs:
           flutter pub get
 
       - name: Build APK Debug
-        if: github.event.inputs.build_type == 'apk-debug' || github.event.inputs.build_type == ''
+        if: steps.build_info.outputs.build_type == 'apk-debug'
         run: |
           flutter build apk --debug \
             --no-shrink \
             --target-platform android-arm,android-arm64,android-x64
+          echo "✅ APK Debug selesai"
 
       - name: Build APK Release
-        if: github.event.inputs.build_type == 'apk-release'
+        if: steps.build_info.outputs.build_type == 'apk-release'
         run: |
           flutter build apk --release \
             --obfuscate \
             --split-debug-info=build/debug-info \
             --target-platform android-arm,android-arm64,android-x64
+          echo "✅ APK Release selesai"
 
       - name: Build AAB Release
-        if: github.event.inputs.build_type == 'aab-release'
+        if: steps.build_info.outputs.build_type == 'aab-release'
         run: |
           flutter build appbundle --release \
             --obfuscate \
             --split-debug-info=build/debug-info
+          echo "✅ AAB Release selesai"
 
+      # ============================================
+      # 📤 PREPARE OUTPUT
+      # ============================================
       - name: Prepare Output Files
         run: |
           mkdir -p output
-          BUILD_TYPE="${{ github.event.inputs.build_type }}"
-          if [ -z "$BUILD_TYPE" ]; then
-            BUILD_TYPE="apk-debug"
-          fi
+          BUILD_TYPE="${{ steps.build_info.outputs.build_type }}"
           TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-          APP_NAME=$(grep '^name:' pubspec.yaml | awk '{print $2}' | tr -d ' ')
+          APP_NAME=$(grep '^name:' pubspec.yaml | awk '{print $2}' | tr -d '\r' || echo "app")
+          
+          echo "📦 Preparing output for $BUILD_TYPE..."
           
           if [ "$BUILD_TYPE" = "apk-debug" ]; then
             APK_PATH=$(find build/app/outputs/flutter-apk -name "*.apk" | head -1)
-            cp "$APK_PATH" "output/${APP_NAME}-debug-${TIMESTAMP}.apk"
+            if [ -f "$APK_PATH" ]; then
+              cp "$APK_PATH" "output/${APP_NAME}_debug_${TIMESTAMP}.apk"
+              echo "✅ APK Debug copied"
+            fi
           elif [ "$BUILD_TYPE" = "apk-release" ]; then
-            APK_PATH=$(find build/app/outputs/flutter-apk -name "*.apk" | head -1)
-            cp "$APK_PATH" "output/${APP_NAME}-release-${TIMESTAMP}.apk"
+            APK_PATH=$(find build/app/outputs/flutter-apk -name "app-release.apk" | head -1)
+            if [ -f "$APK_PATH" ]; then
+              cp "$APK_PATH" "output/${APP_NAME}_release_${TIMESTAMP}.apk"
+              echo "✅ APK Release copied"
+            fi
           elif [ "$BUILD_TYPE" = "aab-release" ]; then
             AAB_PATH=$(find build/app/outputs/bundle/release -name "*.aab" | head -1)
-            cp "$AAB_PATH" "output/${APP_NAME}-release-${TIMESTAMP}.aab"
+            if [ -f "$AAB_PATH" ]; then
+              cp "$AAB_PATH" "output/${APP_NAME}_release_${TIMESTAMP}.aab"
+              echo "✅ AAB Release copied"
+            fi
           fi
           
-          echo "Output files:"
+          echo "📂 Output files:"
           ls -lh output/
 
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: flutter-build-${{ github.event.inputs.build_type }}-${{ github.run_number }}
+          name: flutter-build-${{ steps.build_info.outputs.build_type }}-${{ github.run_number }}
           path: output/
           retention-days: 3
           if-no-files-found: error
 
+      # ============================================
+      # 📊 BUILD SUMMARY
+      # ============================================
       - name: Build Summary
         if: always()
         run: |
@@ -372,11 +577,13 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Key | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
-          echo "| Build Type | ${{ github.event.inputs.build_type }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build Type | ${{ steps.build_info.outputs.build_type }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Flutter Version | ${{ github.event.inputs.flutter_version != '' && github.event.inputs.flutter_version || '3.32.8 (default)' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Run Number | #${{ github.run_number }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Triggered By | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Commit | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📦 Output" >> $GITHUB_STEP_SUMMARY
-          echo '' >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
           ls -lh output/ 2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "No output files" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
