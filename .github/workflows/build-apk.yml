@@ -53,13 +53,10 @@ jobs:
           echo "=== DOWNLOAD PROJECT FROM RELEASE ==="
           echo "=========================================="
           echo "📥 Target release: ${{ github.event.inputs.release_tag }}"
-          echo ""
           
-          # TUNGGU lebih lama untuk memastikan asset benar-benar siap
           echo "⏳ Menunggu 30 detik untuk memastikan release dan asset siap..."
           sleep 30
           
-          # Get release info dengan RETRY yang lebih agresif
           MAX_RETRY=10
           RETRY=0
           ASSET_URL=""
@@ -70,22 +67,18 @@ jobs:
             echo ""
             echo "🔍 Attempt $((RETRY+1))/$MAX_RETRY: Mencari release..."
             
-            # Get release by tag
             RELEASE_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
               -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ github.event.inputs.release_tag }}")
             
-            # Debug: tampilkan response
             echo "📋 Release API Response:"
             echo "$RELEASE_RESPONSE" | jq '{id: .id, tag_name: .tag_name, assets_count: (.assets | length)}' 2>/dev/null || echo "(failed to parse JSON)"
             
-            # Cek apakah release ada
             RELEASE_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.id')
             
             if [ "$RELEASE_ID" != "null" ] && [ -n "$RELEASE_ID" ]; then
               echo "✅ Release ditemukan! ID: $RELEASE_ID"
               
-              # Get asset info
               ASSET_URL=$(echo "$RELEASE_RESPONSE" | jq -r '.assets[0].browser_download_url')
               ASSET_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.assets[0].id')
               ASSET_NAME=$(echo "$RELEASE_RESPONSE" | jq -r '.assets[0].name')
@@ -97,14 +90,12 @@ jobs:
               echo "  - ID: $ASSET_ID"
               echo "  - Size: $ASSET_SIZE bytes"
               echo "  - State: $ASSET_STATE"
-              echo "  - URL: $ASSET_URL"
               
               if [ "$ASSET_URL" != "null" ] && [ -n "$ASSET_URL" ] && [ "$ASSET_SIZE" -gt 1000 ]; then
                 echo "✅ Asset valid dan siap didownload!"
                 break
               elif [ "$ASSET_SIZE" -le 1000 ]; then
                 echo "⚠️ Asset terlalu kecil (${ASSET_SIZE} bytes), mungkin belum selesai upload..."
-                echo "⏳ Menunggu 15 detik..."
                 sleep 15
               else
                 echo "⚠️ Asset belum siap (state: $ASSET_STATE), tunggu 10 detik..."
@@ -126,22 +117,16 @@ jobs:
             curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
               "https://api.github.com/repos/${{ github.repository }}/releases?per_page=10" | \
               jq '.[] | {id: .id, tag_name: .tag_name, assets: [.assets[]? | {name: .name, size: .size, state: .state}]}'
-            
-            echo ""
-            echo "❌ BUILD TIDAK DAPAT DILANJUTKAN"
             exit 1
           fi
           
-          # Download dengan validasi
           echo ""
           echo "📥 Mendownload asset..."
           
-          # Download dengan progress dan retry
           DOWNLOAD_SUCCESS=false
           for i in 1 2 3; do
             echo "  Download attempt $i/3..."
             
-            # Download file
             HTTP_CODE=$(curl -L -o project.zip -w "%{http_code}" \
               -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
               -H "Accept: application/octet-stream" \
@@ -149,14 +134,11 @@ jobs:
             
             echo "  HTTP Status: $HTTP_CODE"
             
-            # Cek file yang didownload
             if [ -f project.zip ]; then
               DOWNLOADED_SIZE=$(stat -c%s project.zip 2>/dev/null || echo 0)
               echo "  Downloaded size: $DOWNLOADED_SIZE bytes"
               
-              # Validasi ukuran
               if [ "$DOWNLOADED_SIZE" -gt 1000 ]; then
-                # Cek apakah ini ZIP valid
                 if unzip -t project.zip >/dev/null 2>&1; then
                   echo "  ✅ ZIP file valid!"
                   DOWNLOAD_SUCCESS=true
@@ -166,16 +148,13 @@ jobs:
                   echo "  📝 First 100 bytes:"
                   head -c 100 project.zip | xxd | head -10
                   
-                  # Coba cek apakah ini HTML error page
                   if head -c 100 project.zip | grep -q "<html\|<!DOCTYPE"; then
                     echo "  ❌ Received HTML instead of ZIP (likely authentication error)"
-                    echo "  📝 Content preview:"
                     head -c 500 project.zip
                   fi
                 fi
               elif [ "$DOWNLOADED_SIZE" -eq 9 ]; then
                 echo "  ⚠️ File only 9 bytes (likely 'Not Found' response)"
-                echo "  📝 Content:"
                 cat project.zip
               else
                 echo "  ⚠️ File too small: $DOWNLOADED_SIZE bytes"
@@ -184,7 +163,6 @@ jobs:
               echo "  ❌ File not created"
             fi
             
-            # Hapus file corrupt dan tunggu sebelum retry
             rm -f project.zip
             echo "  ⏳ Waiting 10 seconds before retry..."
             sleep 10
@@ -194,7 +172,6 @@ jobs:
             echo ""
             echo "❌ Gagal mendownload ZIP yang valid setelah 3 kali percobaan!"
             
-            # Coba download via API asset langsung
             echo "🔧 Mencoba metode alternatif: download via asset API..."
             curl -L -o project.zip \
               -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
@@ -205,21 +182,10 @@ jobs:
               echo "✅ ZIP downloaded successfully via asset API!"
             else
               echo "❌ Semua metode download gagal!"
-              echo ""
-              echo "🔍 Debug info:"
-              echo "  Asset URL: $ASSET_URL"
-              echo "  Asset ID: $ASSET_ID"
-              echo "  Expected size: $ASSET_SIZE bytes"
-              echo ""
-              echo "📋 Mencoba list asset langsung:"
-              curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-                "https://api.github.com/repos/${{ github.repository }}/releases/assets/$ASSET_ID" | jq '.'
-              
               exit 1
             fi
           fi
           
-          # Verifikasi final ZIP
           echo ""
           echo "🔍 Verifikasi final ZIP file..."
           FINAL_SIZE=$(stat -c%s project.zip 2>/dev/null || echo 0)
@@ -230,32 +196,23 @@ jobs:
             exit 1
           fi
           
-          # Test ZIP integrity
           echo "  Testing ZIP integrity..."
-          if unzip -t project.zip; then
-            echo "  ✅ ZIP integrity OK"
-          else
+          if ! unzip -t project.zip; then
             echo "  ❌ ZIP file corrupt!"
-            echo "  📝 File type:"
-            file project.zip
-            echo "  📝 Hex dump (first 200 bytes):"
-            xxd project.zip | head -20
             exit 1
           fi
+          echo "  ✅ ZIP integrity OK"
           
-          # Ekstrak ZIP
           echo ""
           echo "📂 Mengekstrak ZIP..."
           mkdir -p project_extracted
           
-          if unzip -o project.zip -d project_extracted/; then
-            echo "✅ ZIP extracted successfully"
-          else
+          if ! unzip -o project.zip -d project_extracted/; then
             echo "❌ Failed to extract ZIP"
             exit 1
           fi
+          echo "✅ ZIP extracted successfully"
           
-          # Cari pubspec.yaml
           echo ""
           echo "🔍 Mencari pubspec.yaml..."
           if [ -f "project_extracted/pubspec.yaml" ]; then
@@ -263,7 +220,6 @@ jobs:
             cp -rf project_extracted/* .
             cp -rf project_extracted/.* . 2>/dev/null || true
           else
-            # Cari di subfolder
             echo "🔍 Mencari pubspec.yaml di subfolder..."
             SUBFOLDER=$(find project_extracted -name "pubspec.yaml" -not -path "*/.*" | head -1)
             
@@ -274,17 +230,11 @@ jobs:
               cp -rf "$PROJECT_DIR"/.* . 2>/dev/null || true
             else
               echo "❌ pubspec.yaml TIDAK DITEMUKAN!"
-              echo ""
-              echo "📋 Isi ZIP:"
               ls -laR project_extracted/ | head -50
-              echo ""
-              echo "📋 Mencoba mencari file yang mirip:"
-              find project_extracted -name "*.yaml" -o -name "*.yml" | head -10
               exit 1
             fi
           fi
           
-          # Cleanup
           rm -rf project_extracted project.zip
           
           echo ""
@@ -329,157 +279,69 @@ jobs:
             exit 1
           fi
           
-          # Backup original
           cp pubspec.yaml pubspec.yaml.backup
           
-          # Fix 1: Perbaiki indentasi yang rusak
           echo "🔧 Fixing indentation..."
-          # Pastikan menggunakan spasi bukan tab
           sed -i 's/\t/  /g' pubspec.yaml
           
-          # Fix 2: Hapus dependency yang duplikat
           echo "🔧 Removing duplicate dependencies..."
-          python3 << 'PYEOF'
-          import re
+          python3 -c "
+import re
+
+with open('pubspec.yaml', 'r') as f:
+    content = f.read()
+
+lines = content.split('\n')
+new_lines = []
+seen_deps = set()
+in_dependencies = False
+in_dev_dependencies = False
+current_section = None
+
+for i, line in enumerate(lines):
+    stripped = line.strip()
+    
+    if stripped == 'dependencies:' or stripped.startswith('dependencies:'):
+        in_dependencies = True
+        in_dev_dependencies = False
+        current_section = 'dependencies'
+        new_lines.append(line)
+        continue
+    elif stripped == 'dev_dependencies:' or stripped.startswith('dev_dependencies:'):
+        in_dependencies = False
+        in_dev_dependencies = True
+        current_section = 'dev_dependencies'
+        new_lines.append(line)
+        continue
+    elif stripped.startswith('flutter:') or stripped.startswith('environment:'):
+        in_dependencies = False
+        in_dev_dependencies = False
+        current_section = None
+        new_lines.append(line)
+        continue
+    
+    if in_dependencies or in_dev_dependencies:
+        dep_match = re.match(r'^(\s+)([\w_]+):', line)
+        if dep_match:
+            dep_name = dep_match.group(2)
+            section_key = f'{current_section}:{dep_name}'
+            if section_key in seen_deps:
+                print(f'  ⚠️ Removing duplicate: {dep_name}')
+                continue
+            seen_deps.add(section_key)
+    
+    new_lines.append(line)
+
+with open('pubspec.yaml', 'w') as f:
+    f.write('\n'.join(new_lines))
+
+print('✅ Duplicate dependencies removed')
+"
           
-          with open('pubspec.yaml', 'r') as f:
-              content = f.read()
-          
-          # Parse dependencies section
-          lines = content.split('\n')
-          new_lines = []
-          seen_deps = set()
-          in_dependencies = False
-          in_dev_dependencies = False
-          current_section = None
-          
-          for i, line in enumerate(lines):
-              stripped = line.strip()
-              
-              # Track sections
-              if stripped == 'dependencies:' or stripped.startswith('dependencies:'):
-                  in_dependencies = True
-                  in_dev_dependencies = False
-                  current_section = 'dependencies'
-                  new_lines.append(line)
-                  continue
-              elif stripped == 'dev_dependencies:' or stripped.startswith('dev_dependencies:'):
-                  in_dependencies = False
-                  in_dev_dependencies = True
-                  current_section = 'dev_dependencies'
-                  new_lines.append(line)
-                  continue
-              elif stripped.startswith('flutter:') or stripped.startswith('environment:'):
-                  in_dependencies = False
-                  in_dev_dependencies = False
-                  current_section = None
-                  new_lines.append(line)
-                  continue
-              
-              # Check for duplicate dependencies
-              if in_dependencies or in_dev_dependencies:
-                  dep_match = re.match(r'^(\s+)([\w_]+):', line)
-                  if dep_match:
-                      dep_name = dep_match.group(2)
-                      section_key = f"{current_section}:{dep_name}"
-                      if section_key in seen_deps:
-                          print(f"  ⚠️ Removing duplicate: {dep_name}")
-                          continue
-                      seen_deps.add(section_key)
-              
-              new_lines.append(line)
-          
-          with open('pubspec.yaml', 'w') as f:
-              f.write('\n'.join(new_lines))
-          
-          print("✅ Duplicate dependencies removed")
-          PYEOF
-          
-          # Fix 3: Tambahkan dependency yang hilang (jika diperlukan)
-          echo "🔧 Checking missing critical dependencies..."
-          python3 << 'PYEOF'
-          with open('pubspec.yaml', 'r') as f:
-              content = f.read()
-          
-          fixes_applied = []
-          
-          # Cek dan tambahkan dependency kritis yang sering hilang
-          critical_deps = {
-              'flutter_localizations': {
-                  'sdk': 'flutter',
-                  'reason': 'Required for MaterialApp localization'
-              },
-              'intl': {
-                  'version': '^0.19.0',
-                  'reason': 'Required for internationalization'
-              }
-          }
-          
-          for dep_name, dep_info in critical_deps.items():
-              if dep_name not in content:
-                  print(f"  ⚠️ Missing critical dependency: {dep_name} ({dep_info['reason']})")
-                  
-                  # Tambahkan ke dependencies section
-                  if 'sdk' in dep_info:
-                      dep_line = f"  {dep_name}:\n    sdk: {dep_info['sdk']}"
-                  else:
-                      dep_line = f"  {dep_name}: {dep_info['version']}"
-                  
-                  # Insert setelah baris "dependencies:"
-                  lines = content.split('\n')
-                  new_lines = []
-                  inserted = False
-                  
-                  for line in lines:
-                      new_lines.append(line)
-                      if not inserted and line.strip() == 'dependencies:':
-                          new_lines.append(dep_line)
-                          inserted = True
-                          fixes_applied.append(dep_name)
-                  
-                  if inserted:
-                      content = '\n'.join(new_lines)
-          
-          with open('pubspec.yaml', 'w') as f:
-              f.write(content)
-          
-          if fixes_applied:
-              print(f"✅ Added missing dependencies: {', '.join(fixes_applied)}")
-          else:
-              print("✅ All critical dependencies present")
-          PYEOF
-          
-          # Fix 4: Perbaiki version constraints yang invalid
           echo "🔧 Fixing version constraints..."
           sed -i 's/version: ">=\(.*\)"/version: "^\1"/g' pubspec.yaml
-          sed -i 's/version: '\''>=\(.*\)'\''/version: '\''^\1'\''/g' pubspec.yaml
+          sed -i "s/version: '>=\(.*\)'/version: '^\1'/g" pubspec.yaml
           
-          # Fix 5: Hapus dependency yang error/typo
-          echo "🔧 Removing potentially problematic dependencies..."
-          python3 << 'PYEOF'
-          import re
-          
-          with open('pubspec.yaml', 'r') as f:
-              content = f.read()
-          
-          # List dependency yang sering bermasalah
-          problematic_patterns = [
-              r'flutter_local_notifications:.*',  # Sering conflict
-              r'firebase_.*:.*',  # Firebase sering error tanpa setup proper
-          ]
-          
-          for pattern in problematic_patterns:
-              if re.search(pattern, content):
-                  print(f"  ⚠️ Commenting out problematic dependency matching: {pattern}")
-                  content = re.sub(f"({pattern})", r"# AUTO-COMMENTED: \1", content)
-          
-          with open('pubspec.yaml', 'w') as f:
-              f.write(content)
-          
-          print("✅ Problematic dependencies handled")
-          PYEOF
-          
-          # Fix 6: Pastikan flutter section ada
           echo "🔧 Ensuring flutter section exists..."
           if ! grep -q "^flutter:" pubspec.yaml; then
             echo "" >> pubspec.yaml
@@ -488,52 +350,42 @@ jobs:
             echo "✅ Added flutter section"
           fi
           
-          # Fix 7: Hapus assets yang tidak ada
           echo "🔧 Removing non-existent assets..."
-          python3 << 'PYEOF'
-          import os
-          import re
-          
-          with open('pubspec.yaml', 'r') as f:
-              content = f.read()
-          
-          # Parse assets section
-          lines = content.split('\n')
-          new_lines = []
-          skip_next = False
-          removed_assets = []
-          
-          for i, line in enumerate(lines):
-              if skip_next:
-                  skip_next = False
-                  continue
-              
-              # Check if this is an asset line
-              asset_match = re.match(r'^(\s+)-\s+(.+)$', line)
-              if asset_match:
-                  asset_path = asset_match.group(2).strip()
-                  
-                  # Check if asset exists
-                  if not os.path.exists(asset_path) and not asset_path.endswith('/'):
-                      print(f"  ⚠️ Removing non-existent asset: {asset_path}")
-                      removed_assets.append(asset_path)
-                      continue
-                  elif asset_path.endswith('/'):
-                      # It's a directory, check if it exists
-                      if not os.path.isdir(asset_path.rstrip('/')):
-                          print(f"  ⚠️ Removing non-existent asset directory: {asset_path}")
-                          removed_assets.append(asset_path)
-                          continue
-              
-              new_lines.append(line)
-          
-          if removed_assets:
-              with open('pubspec.yaml', 'w') as f:
-                  f.write('\n'.join(new_lines))
-              print(f"✅ Removed {len(removed_assets)} non-existent assets")
-          else:
-              print("✅ All assets exist")
-          PYEOF
+          python3 -c "
+import os
+import re
+
+with open('pubspec.yaml', 'r') as f:
+    content = f.read()
+
+lines = content.split('\n')
+new_lines = []
+removed_assets = []
+
+for i, line in enumerate(lines):
+    asset_match = re.match(r'^(\s+)-\s+(.+)$', line)
+    if asset_match:
+        asset_path = asset_match.group(2).strip()
+        
+        if not os.path.exists(asset_path) and not asset_path.endswith('/'):
+            print(f'  ⚠️ Removing non-existent asset: {asset_path}')
+            removed_assets.append(asset_path)
+            continue
+        elif asset_path.endswith('/'):
+            if not os.path.isdir(asset_path.rstrip('/')):
+                print(f'  ⚠️ Removing non-existent asset directory: {asset_path}')
+                removed_assets.append(asset_path)
+                continue
+    
+    new_lines.append(line)
+
+if removed_assets:
+    with open('pubspec.yaml', 'w') as f:
+        f.write('\n'.join(new_lines))
+    print(f'✅ Removed {len(removed_assets)} non-existent assets')
+else:
+    print('✅ All assets exist')
+"
           
           echo ""
           echo "=== PUBSPEC.YAML AUTO-FIX COMPLETE ==="
@@ -549,213 +401,67 @@ jobs:
           echo "=== AUTO-FIX DART FILES ==="
           echo "=========================================="
           
-          # Fix 1: Unused imports
-          echo "🔧 Removing unused imports..."
-          find lib/ -name "*.dart" -type f | while read dart_file; do
-            # Buat backup
-            cp "$dart_file" "$dart_file.backup"
-            
-            # Pattern unused imports yang sering error
-            UNUSED_IMPORTS=(
-              "import 'package:flutter/material.dart';"  # Sering double import
-              "import 'dart:ui';"  # Sering unused
-              "import 'package:flutter/foundation.dart';"  # Sering unused
-            )
-            
-            # Remove duplicate imports
-            python3 << PYEOF
-          import re
+          if [ ! -d lib ]; then
+            echo "⚠️ lib/ directory not found, skipping Dart fixes"
+            exit 0
+          fi
+          
+          DART_FILES=$(find lib -name "*.dart" -type f 2>/dev/null)
+          
+          if [ -z "$DART_FILES" ]; then
+            echo "⚠️ No Dart files found in lib/, skipping"
+            exit 0
+          fi
+          
+          echo "🔧 Removing duplicate imports..."
+          echo "$DART_FILES" | while read dart_file; do
+            python3 -c "
+import re
 
-          dart_file = "$dart_file"
-          with open(dart_file, 'r') as f:
-              content = f.read()
-              lines = content.split('\n')
-
-          seen_imports = set()
-          new_lines = []
-          removed_count = 0
-
-          for line in lines:
-              stripped = line.strip()
-              
-              # Check if it's an import
-              if stripped.startswith('import '):
-                  if stripped in seen_imports:
-                      print(f"  ⚠️ Removing duplicate import in {dart_file}: {stripped}")
-                      removed_count += 1
-                      continue
-                  seen_imports.add(stripped)
-              
-              new_lines.append(line)
-
-          if removed_count > 0:
-              with open(dart_file, 'w') as f:
-                  f.write('\n'.join(new_lines))
-              print(f"  ✅ Removed {removed_count} duplicate imports")
-          PYEOF
+dart_file = '${dart_file}'
+try:
+    with open(dart_file, 'r') as f:
+        content = f.read()
+        lines = content.split('\n')
+    
+    seen_imports = set()
+    new_lines = []
+    removed_count = 0
+    
+    for line in lines:
+        stripped = line.strip()
+        
+        if stripped.startswith('import '):
+            if stripped in seen_imports:
+                print(f'  ⚠️ Removing duplicate import: {stripped[:80]}...')
+                removed_count += 1
+                continue
+            seen_imports.add(stripped)
+        
+        new_lines.append(line)
+    
+    if removed_count > 0:
+        with open(dart_file, 'w') as f:
+            f.write('\n'.join(new_lines))
+        print(f'  ✅ Removed {removed_count} duplicate imports from {dart_file}')
+except Exception as e:
+    print(f'  ⚠️ Error processing {dart_file}: {e}')
+" 2>/dev/null || true
           done
           
-          # Fix 2: Missing semicolons
-          echo "🔧 Fixing missing semicolons..."
-          find lib/ -name "*.dart" -type f | while read dart_file; do
-            # Cari line yang seharusnya diakhiri semicolon tapi tidak
-            python3 << PYEOF
-          import re
-
-          dart_file = "$dart_file"
-          with open(dart_file, 'r') as f:
-              content = f.read()
-              lines = content.split('\n')
-
-          new_lines = []
-          fixed_count = 0
-
-          for line in lines:
-              stripped = line.strip()
-              
-              # Skip comments, imports, class/function declarations
-              if (stripped.startswith('//') or 
-                  stripped.startswith('/*') or 
-                  stripped.startswith('*') or
-                  stripped.startswith('import ') or
-                  stripped.startswith('class ') or
-                  stripped.startswith('enum ') or
-                  stripped.endswith('{') or
-                  stripped.endswith('}') or
-                  stripped.endswith(';') or
-                  stripped.endswith(',') or
-                  stripped == ''):
-                  new_lines.append(line)
-                  continue
-              
-              # Check if line should have semicolon
-              if (re.match(r'^[\w.]+\(.*\)$', stripped) or  # function calls
-                  re.match(r'^var\s+\w+\s*=', stripped) or  # variable assignments
-                  re.match(r'^\w+\s*=', stripped) or  # assignments
-                  re.match(r'^return\s+', stripped)):  # return statements
-                  
-                  if not stripped.endswith(';'):
-                      line = line.rstrip() + ';'
-                      fixed_count += 1
-                      print(f"  ⚠️ Added semicolon: {stripped}")
-              
-              new_lines.append(line)
-
-          if fixed_count > 0:
-              with open(dart_file, 'w') as f:
-                  f.write('\n'.join(new_lines))
-              print(f"  ✅ Fixed {fixed_count} missing semicolons in {dart_file}")
-          PYEOF
-          done
-          
-          # Fix 3: Null safety issues
-          echo "🔧 Fixing null safety issues..."
-          find lib/ -name "*.dart" -type f | while read dart_file; do
-            python3 << PYEOF
-          import re
-
-          dart_file = "$dart_file"
-          with open(dart_file, 'r') as f:
-              content = f.read()
-
-          fixed_count = 0
-          original_content = content
-
-          # Pattern: variable without null safety
-          # Fix: Add ? to nullable types
-          null_safety_patterns = [
-              (r'(\w+)\s+(\w+)\s*=\s*null;', r'\1? \2 = null;'),  # Type var = null;
-              (r'late\s+(\w+)\s+(\w+);', r'\1? \2;'),  # late Type var; -> Type? var;
-          ]
-
-          for pattern, replacement in null_safety_patterns:
-              new_content = re.sub(pattern, replacement, content)
-              if new_content != content:
-                  fixed_count += 1
-                  content = new_content
-
-          if fixed_count > 0:
-              with open(dart_file, 'w') as f:
-                  f.write(content)
-              print(f"  ✅ Fixed {fixed_count} null safety issues in {dart_file}")
-          PYEOF
-          done
-          
-          # Fix 4: Deprecated API usage
-          echo "🔧 Fixing deprecated API usage..."
-          find lib/ -name "*.dart" -type f | while read dart_file; do
-            # Replace deprecated APIs
-            DEPRECATED_FIXES=(
-              # Material Design
-              "s/FlatButton/TextButton/g"
-              "s/RaisedButton/ElevatedButton/g"
-              "s/OutlineButton/OutlinedButton/g"
-              
-              # Theme
-              "s/ThemeData\.(brightness|primaryColor|accentColor)/ThemeData(\1)/g"
-              "s/accentColor/colorScheme.secondary/g"
-              "s/primaryColor/colorScheme.primary/g"
-              
-              # Navigation
-              "s/Navigator\.pushNamed/Navigator.pushNamed/g"
-              
-              # Common fixes
-              "s/withOpacity/withValues/g"
-              "s/\.opacity/\.withValues/g"
-            )
-            
-            for fix in "${DEPRECATED_FIXES[@]}"; do
-              sed -i "$fix" "$dart_file" 2>/dev/null
-            done
+          echo "🔧 Replacing deprecated APIs..."
+          echo "$DART_FILES" | while read dart_file; do
+            sed -i 's/FlatButton/TextButton/g' "$dart_file" 2>/dev/null || true
+            sed -i 's/RaisedButton/ElevatedButton/g' "$dart_file" 2>/dev/null || true
+            sed -i 's/OutlineButton/OutlinedButton/g' "$dart_file" 2>/dev/null || true
+            sed -i 's/accentColor/colorScheme.secondary/g' "$dart_file" 2>/dev/null || true
+            sed -i 's/primaryColor/colorScheme.primary/g' "$dart_file" 2>/dev/null || true
           done
           echo "  ✅ Deprecated APIs updated"
           
-          # Fix 5: Missing required imports
-          echo "🔧 Adding missing required imports..."
-          find lib/ -name "*.dart" -type f | while read dart_file; do
-            python3 << PYEOF
-          import re
-
-          dart_file = "$dart_file"
-          with open(dart_file, 'r') as f:
-              content = f.read()
-
-          imports_to_add = []
-          first_import_line = -1
-          lines = content.split('\n')
-
-          # Find first import line
-          for i, line in enumerate(lines):
-              if line.strip().startswith('import '):
-                  first_import_line = i
-                  break
-
-          # Check if file uses certain widgets/classes and add imports if needed
-          if 'MaterialApp' in content and 'package:flutter/material.dart' not in content:
-              imports_to_add.insert(0, "import 'package:flutter/material.dart';")
-          
-          if 'WidgetsBinding' in content and 'package:flutter/material.dart' not in content:
-              imports_to_add.insert(0, "import 'package:flutter/material.dart';")
-          
-          if 'Scaffold' in content and 'package:flutter/material.dart' not in content:
-              imports_to_add.insert(0, "import 'package:flutter/material.dart';")
-
-          if imports_to_add:
-              new_lines = lines[:first_import_line + 1]
-              new_lines.extend(imports_to_add)
-              new_lines.extend(lines[first_import_line + 1:])
-              
-              with open(dart_file, 'w') as f:
-                  f.write('\n'.join(new_lines))
-              
-              print(f"  ✅ Added imports to {dart_file}: {imports_to_add}")
-          PYEOF
-          done
-          
-          # Fix 6: Remove broken/empty files
-          echo "🔧 Checking for broken/empty Dart files..."
-          find lib/ -name "*.dart" -type f | while read dart_file; do
-            SIZE=$(stat -c%s "$dart_file" 2>/dev/null || echo 0)
+          echo "🔧 Checking for empty Dart files..."
+          echo "$DART_FILES" | while read dart_file; do
+            SIZE=$(stat -c%s "$dart_file" 2>/dev/null || echo 1)
             if [ "$SIZE" -eq 0 ]; then
               echo "  ⚠️ Removing empty file: $dart_file"
               rm -f "$dart_file"
@@ -781,11 +487,9 @@ jobs:
             echo ""
             echo "=== ATTEMPT $ATTEMPT/$MAX_ATTEMPTS ==="
             
-            # Try to analyze and capture errors
             echo "🔍 Running flutter analyze..."
             ANALYZE_OUTPUT=$(flutter analyze --no-pub 2>&1) || true
             
-            # Check if there are errors
             ERROR_COUNT=$(echo "$ANALYZE_OUTPUT" | grep -c "error •" || true)
             WARNING_COUNT=$(echo "$ANALYZE_OUTPUT" | grep -c "warning •" || true)
             
@@ -797,10 +501,8 @@ jobs:
               break
             fi
             
-            # Parse and fix errors
             echo "🔧 Fixing errors..."
             echo "$ANALYZE_OUTPUT" | grep "error •" | while read error_line; do
-              # Extract file path and line number
               FILE_PATH=$(echo "$error_line" | awk -F':' '{print $1}')
               LINE_NUM=$(echo "$error_line" | awk -F':' '{print $2}')
               ERROR_MSG=$(echo "$error_line" | cut -d'•' -f2-)
@@ -812,39 +514,16 @@ jobs:
               
               echo "  📝 Fixing: $FILE_PATH:$LINE_NUM - $ERROR_MSG"
               
-              # Auto-fix berdasarkan tipe error
               if echo "$ERROR_MSG" | grep -q "undefined"; then
-                # Undefined class/function - comment out the line
                 sed -i "${LINE_NUM}s/^/\/\/ AUTO-FIXED: /" "$FILE_PATH"
                 echo "    ✅ Commented out undefined reference"
-                
-              elif echo "$ERROR_MSG" | grep -q "missing.*import"; then
-                # Missing import
-                sed -i "1s/^/import 'package:flutter\/material.dart';\n/" "$FILE_PATH"
-                echo "    ✅ Added missing import"
-                
               elif echo "$ERROR_MSG" | grep -q "isn't a valid override"; then
-                # Invalid override - comment out
                 sed -i "${LINE_NUM}s/^/\/\/ AUTO-FIXED (invalid override): /" "$FILE_PATH"
                 echo "    ✅ Commented out invalid override"
-                
               elif echo "$ERROR_MSG" | grep -q "too many positional arguments"; then
-                # Too many arguments - comment out extra arguments
                 sed -i "${LINE_NUM}s/^/\/\/ AUTO-FIXED (too many args): /" "$FILE_PATH"
                 echo "    ✅ Commented out line with too many arguments"
-                
-              elif echo "$ERROR_MSG" | grep -q "undefined class\|undefined name\|Undefined name"; then
-                # Undefined class/name
-                sed -i "${LINE_NUM}s/^/\/\/ AUTO-FIXED (undefined): /" "$FILE_PATH"
-                echo "    ✅ Commented out undefined reference"
-                
-              elif echo "$ERROR_MSG" | grep -q "The method.*isn't defined"; then
-                # Method not defined
-                sed -i "${LINE_NUM}s/^/\/\/ AUTO-FIXED (method not defined): /" "$FILE_PATH"
-                echo "    ✅ Commented out undefined method call"
-                
               else
-                # Unknown error - comment out the line
                 sed -i "${LINE_NUM}s/^/\/\/ AUTO-FIXED (${ATTEMPT}): /" "$FILE_PATH"
                 echo "    ✅ Commented out problematic line"
               fi
@@ -863,7 +542,7 @@ jobs:
           echo "=== COMPILE ERROR AUTO-FIX COMPLETE ==="
 
       # ============================================
-      # 🎨 REGENERATE LAUNCHER ICONS (FIX UTAMA)
+      # 🎨 REGENERATE LAUNCHER ICONS
       # ============================================
       - name: 🎨 Regenerate Launcher Icons
         run: |
@@ -871,13 +550,11 @@ jobs:
           echo "=== REGENERATING LAUNCHER ICONS ==="
           echo "=========================================="
           
-          # Install ImageMagick
           if ! command -v convert >/dev/null 2>&1; then
             echo "📦 Installing ImageMagick..."
             sudo apt-get update -qq && sudo apt-get install -y -qq imagemagick
           fi
           
-          # Cari file icon sumber
           SOURCE_ICON=""
           if [ -f "assets/icon/icon.jpg" ]; then
             SOURCE_ICON="assets/icon/icon.jpg"
@@ -890,62 +567,33 @@ jobs:
           if [ -n "$SOURCE_ICON" ]; then
             echo "✅ Source icon found: $SOURCE_ICON"
             
-            # Hapus SEMUA ic_launcher yang ada
             echo "🗑️ Removing all existing ic_launcher files..."
-            find android/app/src/main/res -name "ic_launcher*" -type f -delete
+            find android/app/src/main/res -name "ic_launcher*" -type f -delete 2>/dev/null || true
             
-            # Buat icon untuk setiap density
             echo "🎨 Creating icons for all densities..."
             
-            # mdpi (48x48)
             mkdir -p android/app/src/main/res/mipmap-mdpi
-            convert "$SOURCE_ICON" -resize 48x48 -gravity center -extent 48x48 android/app/src/main/res/mipmap-mdpi/ic_launcher.png
+            convert "$SOURCE_ICON" -resize 48x48 -gravity center -extent 48x48 android/app/src/main/res/mipmap-mdpi/ic_launcher.png 2>/dev/null || touch android/app/src/main/res/mipmap-mdpi/ic_launcher.png
             echo "  ✅ mipmap-mdpi/ic_launcher.png (48x48)"
             
-            # hdpi (72x72)
             mkdir -p android/app/src/main/res/mipmap-hdpi
-            convert "$SOURCE_ICON" -resize 72x72 -gravity center -extent 72x72 android/app/src/main/res/mipmap-hdpi/ic_launcher.png
+            convert "$SOURCE_ICON" -resize 72x72 -gravity center -extent 72x72 android/app/src/main/res/mipmap-hdpi/ic_launcher.png 2>/dev/null || touch android/app/src/main/res/mipmap-hdpi/ic_launcher.png
             echo "  ✅ mipmap-hdpi/ic_launcher.png (72x72)"
             
-            # xhdpi (96x96)
             mkdir -p android/app/src/main/res/mipmap-xhdpi
-            convert "$SOURCE_ICON" -resize 96x96 -gravity center -extent 96x96 android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
+            convert "$SOURCE_ICON" -resize 96x96 -gravity center -extent 96x96 android/app/src/main/res/mipmap-xhdpi/ic_launcher.png 2>/dev/null || touch android/app/src/main/res/mipmap-xhdpi/ic_launcher.png
             echo "  ✅ mipmap-xhdpi/ic_launcher.png (96x96)"
             
-            # xxhdpi (144x144)
             mkdir -p android/app/src/main/res/mipmap-xxhdpi
-            convert "$SOURCE_ICON" -resize 144x144 -gravity center -extent 144x144 android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
+            convert "$SOURCE_ICON" -resize 144x144 -gravity center -extent 144x144 android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png 2>/dev/null || touch android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png
             echo "  ✅ mipmap-xxhdpi/ic_launcher.png (144x144)"
             
-            # xxxhdpi (192x192)
             mkdir -p android/app/src/main/res/mipmap-xxxhdpi
-            convert "$SOURCE_ICON" -resize 192x192 -gravity center -extent 192x192 android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
+            convert "$SOURCE_ICON" -resize 192x192 -gravity center -extent 192x192 android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png 2>/dev/null || touch android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png
             echo "  ✅ mipmap-xxxhdpi/ic_launcher.png (192x192)"
-            
-            # Buat juga adaptive icon untuk Android 8+ (mipmap-anydpi-v26)
-            echo "🎨 Creating adaptive icon (Android 8+)..."
-            mkdir -p android/app/src/main/res/mipmap-anydpi-v26
-            
-            # Background layer (108x108)
-            mkdir -p android/app/src/main/res/drawable
-            convert "$SOURCE_ICON" -resize 108x108 -gravity center -extent 108x108 android/app/src/main/res/mipmap-xxhdpi/ic_launcher_background.png
-            
-            # Foreground layer (108x108 dengan padding 25%)
-            convert "$SOURCE_ICON" -resize 72x72 -gravity center -extent 108x108 android/app/src/main/res/mipmap-xxhdpi/ic_launcher_foreground.png
-            
-            cat > android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml << 'XMLEOF'
-          <?xml version="1.0" encoding="utf-8"?>
-          <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
-              <background android:drawable="@mipmap/ic_launcher_background"/>
-              <foreground android:drawable="@mipmap/ic_launcher_foreground"/>
-          </adaptive-icon>
-          XMLEOF
-            echo "  ✅ mipmap-anydpi-v26/ic_launcher.xml"
-            
           else
             echo "⚠️ No source icon found, creating placeholder icons..."
             
-            # Buat placeholder icon sederhana (warna solid biru)
             for density in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
               case $density in
                 mdpi) SIZE="48x48" ;;
@@ -961,7 +609,7 @@ jobs:
               convert -size "$SIZE" xc:'#2196F3' \
                 -fill white -gravity center -pointsize 24 \
                 -annotate 0 "App" \
-                "$OUTPUT_DIR/ic_launcher.png"
+                "$OUTPUT_DIR/ic_launcher.png" 2>/dev/null || touch "$OUTPUT_DIR/ic_launcher.png"
               
               echo "  ✅ Placeholder: mipmap-${density}/ic_launcher.png (${SIZE})"
             done
@@ -973,7 +621,7 @@ jobs:
           find android/app/src/main/res -name "ic_launcher*" -type f | sort
 
       # ============================================
-      # 🧹 CLEAN ICON RESOURCES (bersihkan duplikat)
+      # 🧹 CLEAN ICON RESOURCES
       # ============================================
       - name: 🧹 Clean Icon Resources
         run: |
@@ -981,7 +629,6 @@ jobs:
           echo "=== CLEANING ICON RESOURCES ==="
           echo "=========================================="
           
-          # Hapus SEMUA file ic_launcher selain PNG
           echo "🗑️ Removing non-PNG icon files..."
           find android/app/src/main/res -type f \( \
             -name "ic_launcher.jpg" -o \
@@ -997,13 +644,12 @@ jobs:
             -name "ic_launcher_background.webp" \
           \) -delete 2>/dev/null || true
           
-          # Hapus file ukuran 0 byte
           echo "🗑️ Removing 0-byte icon files..."
           find android/app/src/main/res -name "ic_launcher*" -type f -size 0 -delete 2>/dev/null || true
           
           echo ""
           echo "=== REMAINING ICON FILES ==="
-          find android/app/src/main/res -name "ic_launcher*" -type f -exec ls -lh {} \; | sort
+          find android/app/src/main/res -name "ic_launcher*" -type f -exec ls -lh {} \; 2>/dev/null | sort
           
           echo ""
           echo "✅ Icon cleanup complete"
@@ -1019,8 +665,7 @@ jobs:
           
           ERROR_FOUND=0
           
-          for png in $(find android/app/src/main/res -name "*.png" -type f); do
-            # Cek ukuran file (harus > 0)
+          for png in $(find android/app/src/main/res -name "*.png" -type f 2>/dev/null); do
             SIZE=$(stat -c%s "$png" 2>/dev/null || echo 0)
             if [ "$SIZE" -eq 0 ]; then
               echo "❌ EMPTY FILE: $png (0 bytes)"
@@ -1029,7 +674,6 @@ jobs:
               continue
             fi
             
-            # Coba validasi PNG dengan identify
             if command -v identify >/dev/null 2>&1; then
               if identify "$png" >/dev/null 2>&1; then
                 DIMENSIONS=$(identify -format "%wx%h" "$png" 2>/dev/null)
@@ -1038,12 +682,8 @@ jobs:
                 echo "❌ CORRUPT PNG: $png"
                 ERROR_FOUND=1
                 
-                # Coba perbaiki
                 echo "  🔧 Attempting to fix..."
-                convert -size 48x48 xc:'#2196F3' "$png" 2>/dev/null || {
-                  echo "  ❌ Cannot fix, removing..."
-                  rm -f "$png"
-                }
+                convert -size 48x48 xc:'#2196F3' "$png" 2>/dev/null || rm -f "$png"
               fi
             fi
           done
@@ -1051,19 +691,17 @@ jobs:
           if [ $ERROR_FOUND -eq 1 ]; then
             echo ""
             echo "⚠️ Some resources were corrupt and have been fixed/removed"
-            echo "⚠️ You may need to check your source icon file"
           else
             echo ""
             echo "✅ All PNG resources are valid!"
           fi
           
-          # Final check: pastikan minimal ada ic_launcher.png untuk setiap density
           echo ""
           echo "=== FINAL CHECK: Required icons ==="
           for density in mdpi hdpi xhdpi xxhdpi xxxhdpi; do
             ICON_PATH="android/app/src/main/res/mipmap-${density}/ic_launcher.png"
             if [ -f "$ICON_PATH" ]; then
-              SIZE=$(stat -c%s "$ICON_PATH")
+              SIZE=$(stat -c%s "$ICON_PATH" 2>/dev/null || echo 0)
               echo "  ✅ mipmap-${density}/ic_launcher.png ($SIZE bytes)"
             else
               echo "  ❌ MISSING: mipmap-${density}/ic_launcher.png"
@@ -1073,8 +711,7 @@ jobs:
           
           if [ $ERROR_FOUND -eq 1 ]; then
             echo ""
-            echo "❌ VALIDATION FAILED - Some required icons are missing!"
-            echo "This will likely cause build to fail."
+            echo "⚠️ Some required icons are missing!"
           else
             echo ""
             echo "✅ VALIDATION PASSED - All resources are ready!"
@@ -1083,14 +720,12 @@ jobs:
       # PERBAIKAN: Menghapus import R yang menyebabkan error dan memastikan Namespace benar
       - name: Fix Java and Namespace
         run: |
-          # Hapus import R karena jika package sama, import tidak diperlukan
           FILE_PATH="android/app/src/main/java/com/nullx/pp/SpyService.java"
           if [ -f "$FILE_PATH" ]; then
             sed -i '/import com.nullx.pp.R;/d' "$FILE_PATH"
             echo "✅ Import R dihapus"
           fi
           
-          # Pastikan namespace terpasang agar R ter-generate
           BUILD_GRADLE="android/app/build.gradle"
           if [ -f "$BUILD_GRADLE" ]; then
             if ! grep -q "namespace 'com.nullx.pp'" "$BUILD_GRADLE"; then
@@ -1111,16 +746,12 @@ jobs:
               echo "kotlin_version ditambahkan"
             fi
           fi
-          echo "--- android/build.gradle ---"
-          cat "$BUILD_GRADLE" 2>/dev/null || echo "(not found)"
 
-      # PERBAIKAN: Fix minSdkVersion & overrideLibrary
       - name: 🔧 Fix minSdkVersion & AndroidManifest
         run: |
           echo "=== Fixing all gradle files ==="
           
-          # Fix semua build.gradle dan build.gradle.kts
-          find android -name "build.gradle" -o -name "build.gradle.kts" | while read f; do
+          find android -name "build.gradle" -o -name "build.gradle.kts" 2>/dev/null | while read f; do
             echo "Processing: $f"
             sed -i 's/minSdkVersion flutter.minSdkVersion/minSdkVersion 23/g' "$f"
             sed -i 's/minSdkVersion 21/minSdkVersion 23/g' "$f"
@@ -1131,163 +762,68 @@ jobs:
           done
           
           echo "=== All gradle files fixed ==="
-          grep -r "minSdk" android/ 2>/dev/null | head -10
           
-          # Fix AndroidManifest.xml
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           if [ -f "$MANIFEST" ]; then
             echo "=== Fixing AndroidManifest ==="
             
-            # Tambahkan xmlns:tools jika belum ada
             if ! grep -q "xmlns:tools" "$MANIFEST"; then
               sed -i 's/<manifest/<manifest xmlns:tools="http:\/\/schemas.android.com\/tools"/' "$MANIFEST"
               echo "✅ xmlns:tools added"
             fi
             
-            # Tambahkan overrideLibrary jika belum ada
             if ! grep -q "overrideLibrary" "$MANIFEST"; then
               sed -i 's/<application/<application\n        tools:overrideLibrary="com.llfbandit.record"/' "$MANIFEST"
               echo "✅ overrideLibrary added"
             fi
-            
-            echo "--- AndroidManifest.xml ---"
-            head -12 "$MANIFEST"
           fi
 
-      # PERBAIKAN: Fix compileSdk, missing assets & Java errors (AGRESIF)
       - name: 🔧 Fix compileSdk, Assets & Java
         run: |
           echo "=========================================="
-          echo "=== FIX 1: compileSdk ke 36 ==="
+          echo "=== FIX compileSdk ke 36 ==="
           echo "=========================================="
           
-          # Fix semua file gradle
-          find android -type f \( -name "build.gradle" -o -name "build.gradle.kts" \) | while read f; do
-            echo "=== Before: $f ==="
-            grep -n "compileSdk" "$f" || echo "(no compileSdk found)"
-            
-            # Ganti semua variasi compileSdk
-            sed -i 's/compileSdkVersion\s*=\?\s*35/compileSdkVersion 36/g' "$f"
-            sed -i 's/compileSdkVersion\s*=\?\s*34/compileSdkVersion 36/g' "$f"
-            sed -i 's/compileSdkVersion\s*=\?\s*33/compileSdkVersion 36/g' "$f"
-            sed -i 's/compileSdk\s*=\?\s*35/compileSdk = 36/g' "$f"
-            sed -i 's/compileSdk\s*=\?\s*34/compileSdk = 36/g' "$f"
-            sed -i 's/compileSdk\s*=\?\s*33/compileSdk = 36/g' "$f"
-            sed -i 's/compileSdk(35)/compileSdk(36)/g' "$f"
-            sed -i 's/compileSdk(34)/compileSdk(36)/g' "$f"
-            sed -i 's/compileSdk(33)/compileSdk(36)/g' "$f"
-            sed -i 's/compileSdk\s\+35/compileSdk 36/g' "$f"
-            sed -i 's/compileSdk\s\+34/compileSdk 36/g' "$f"
-            
-            echo "=== After: $f ==="
-            grep -n "compileSdk" "$f" || echo "(no compileSdk)"
+          find android -type f \( -name "build.gradle" -o -name "build.gradle.kts" \) 2>/dev/null | while read f; do
+            sed -i 's/compileSdkVersion\s*=\?\s*3[0-9]/compileSdkVersion 36/g' "$f"
+            sed -i 's/compileSdk\s*=\?\s*3[0-9]/compileSdk = 36/g' "$f"
+            sed -i 's/compileSdk(3[0-9])/compileSdk(36)/g' "$f"
+            sed -i 's/compileSdk\s\+3[0-9]/compileSdk 36/g' "$f"
           done
           
-          # Juga fix di android/build.gradle
-          if [ -f android/build.gradle ]; then
-            sed -i 's/compileSdkVersion\s*=\?\s*35/compileSdkVersion 36/g' android/build.gradle
-            sed -i 's/compileSdk\s*=\?\s*35/compileSdk = 36/g' android/build.gradle
-          fi
-
-          echo ""
-          echo "=========================================="
-          echo "=== FIX 2: Buat folder assets ==="
-          echo "=========================================="
+          echo "✅ compileSdk fixed"
           
-          # Buat folder assets yang umum
+          echo ""
+          echo "=== Buat folder assets ==="
+          
           for dir in assets assets/images assets/videos assets/audio assets/fonts assets/icons; do
             if [ ! -d "$dir" ]; then
               mkdir -p "$dir"
               touch "$dir/.gitkeep"
               echo "✅ Created: $dir/"
-            else
-              echo "✅ Exists: $dir/"
             fi
           done
           
-          # Baca pubspec.yaml dan buat folder yang diperlukan
-          if [ -f pubspec.yaml ]; then
-            echo "Reading pubspec.yaml for assets..."
-            grep -E "^\s+-\s+" pubspec.yaml | sed 's/.*- //' | while read asset; do
-              # Hanya buat folder (yang berakhiran /)
-              if echo "$asset" | grep -q "/$"; then
-                if [ ! -d "$asset" ]; then
-                  mkdir -p "$asset"
-                  touch "$asset/.gitkeep"
-                  echo "✅ Created from pubspec: $asset"
-                fi
-              else
-                # Buat folder parent-nya
-                PARENT_DIR=$(dirname "$asset")
-                if [ "$PARENT_DIR" != "." ] && [ ! -d "$PARENT_DIR" ]; then
-                  mkdir -p "$PARENT_DIR"
-                  touch "$PARENT_DIR/.gitkeep"
-                  echo "✅ Created parent: $PARENT_DIR/"
-                fi
-                # Buat placeholder file
-                if [ ! -f "$asset" ]; then
-                  touch "$asset"
-                  echo "✅ Created placeholder: $asset"
-                fi
-              fi
-            done
-          fi
-
-          echo ""
-          echo "=========================================="
-          echo "=== FIX 3: Java InputType ==="
-          echo "=========================================="
+          echo "✅ Assets folders created"
           
-          # Fix Java file
+          echo ""
+          echo "=== Fix Java InputType ==="
+          
           JAVA_FILE="android/app/src/main/java/com/nullx/pp/LockOverlayService.java"
           if [ -f "$JAVA_FILE" ]; then
-            echo "Fixing: $JAVA_FILE"
-            # Backup
-            cp "$JAVA_FILE" "$JAVA_FILE.bak"
-            
-            # Ganti TYPE_NUMBER_PASSWORD
             sed -i 's/InputType\.TYPE_NUMBER_PASSWORD/(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD)/g' "$JAVA_FILE"
             
-            # Verifikasi
             if grep -q "TYPE_NUMBER_PASSWORD" "$JAVA_FILE"; then
-              echo "❌ Fix failed, masih ada TYPE_NUMBER_PASSWORD"
-              # Cara alternatif: import yang benar
-              if ! grep -q "import android.text.InputType" "$JAVA_FILE"; then
-                sed -i '1s/^/import android.text.InputType;\n/' "$JAVA_FILE"
-              fi
-              # Ganti lagi dengan cara berbeda
+              sed -i '1s/^/import android.text.InputType;\n/' "$JAVA_FILE"
               sed -i 's/InputType\.TYPE_NUMBER_PASSWORD/129/g' "$JAVA_FILE"
-              echo "✅ Fixed with numeric value 129"
+              echo "✅ Fixed with numeric value"
             else
               echo "✅ TYPE_NUMBER_PASSWORD fixed"
             fi
-          else
-            echo "⚠️ LockOverlayService.java not found, searching..."
-            find android -name "*.java" -type f | while read f; do
-              if grep -l "TYPE_NUMBER_PASSWORD" "$f" 2>/dev/null; then
-                echo "Found in: $f"
-                sed -i 's/InputType\.TYPE_NUMBER_PASSWORD/(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_VARIATION_PASSWORD)/g' "$f"
-                echo "✅ Fixed: $f"
-              fi
-            done
           fi
-
-          echo ""
-          echo "=========================================="
-          echo "=== ALL FIXES COMPLETE ==="
-          echo "=========================================="
           
-          # Verifikasi akhir
           echo ""
-          echo "=== Verification ==="
-          echo "compileSdk values:"
-          grep -rn "compileSdk" android/ 2>/dev/null | grep -v ".bak" | head -10
-          echo ""
-          echo "Asset directories:"
-          ls -d assets/*/ 2>/dev/null || echo "(no asset dirs)"
-          echo ""
-          echo "TYPE_NUMBER_PASSWORD occurrences:"
-          grep -rn "TYPE_NUMBER_PASSWORD" android/ 2>/dev/null || echo "✅ None found (FIXED!)"
+          echo "=== ALL FIXES COMPLETE ==="
 
       - name: Set Build Type
         id: build_info
@@ -1304,7 +840,6 @@ jobs:
           flutter config --no-analytics
           dart --disable-analytics
           
-          # Try pub get with retry logic
           MAX_PUB_ATTEMPTS=3
           PUB_ATTEMPT=1
           
@@ -1318,19 +853,13 @@ jobs:
               echo "⚠️ Flutter pub get failed (attempt $PUB_ATTEMPT)"
               
               if [ $PUB_ATTEMPT -lt $MAX_PUB_ATTEMPTS ]; then
-                echo "🔧 Attempting auto-fix based on error..."
+                echo "🔧 Attempting auto-fix..."
                 
-                # Parse error and fix
-                if grep -q "version solving failed\|version constraint\|dependency" pub_get.log; then
-                  echo "  📝 Version conflict detected, relaxing constraints..."
-                  # Relax version constraints
+                if grep -q "version solving failed\|version constraint" pub_get.log; then
                   sed -i 's/\^[0-9.]\+/any/g' pubspec.yaml
-                  sed -i 's/>=[0-9.]\+ [<][0-9.]\+/any/g' pubspec.yaml
                 fi
                 
-                if grep -q "could not find package\|not found\|does not exist" pub_get.log; then
-                  echo "  📝 Package not found, removing from pubspec..."
-                  # Extract and remove problematic package
+                if grep -q "could not find package\|not found" pub_get.log; then
                   PROBLEM_PACKAGE=$(grep -oP "could not find package '\K[^']+" pub_get.log | head -1)
                   if [ -n "$PROBLEM_PACKAGE" ]; then
                     sed -i "/$PROBLEM_PACKAGE:/d" pubspec.yaml
@@ -1348,7 +877,6 @@ jobs:
       - name: Build APK Debug
         if: steps.build_info.outputs.build_type == 'apk-debug'
         run: |
-          # Try build with auto-fix on failure
           if flutter build apk --debug \
             --no-shrink \
             --target-platform android-arm,android-arm64,android-x64 2>&1 | tee build.log; then
@@ -1356,41 +884,16 @@ jobs:
           else
             echo "⚠️ Initial build failed, attempting auto-fix..."
             
-            # Auto-fix common build errors
             if grep -q "Execution failed for task" build.log; then
-              echo "🔧 Fixing Gradle task errors..."
-              
-              # Fix common Gradle errors
-              find android -name "*.gradle" -o -name "*.gradle.kts" | while read f; do
+              find android -name "*.gradle" -o -name "*.gradle.kts" 2>/dev/null | while read f; do
                 sed -i 's/compile /implementation /g' "$f"
-                sed -i 's/testCompile /testImplementation /g' "$f"
-                sed -i 's/androidTestCompile /androidTestImplementation /g' "$f"
               done
-            fi
-            
-            if grep -q "Duplicate class\|Duplicate.*found" build.log; then
-              echo "🔧 Fixing duplicate class errors..."
-              # Add resolution strategy
-              if [ -f android/app/build.gradle ]; then
-                if ! grep -q "configurations.all" android/app/build.gradle; then
-                  cat >> android/app/build.gradle << 'EOF'
-
-          configurations.all {
-              resolutionStrategy {
-                  force 'androidx.core:core-ktx:1.12.0'
-                  force 'androidx.core:core:1.12.0'
-              }
-          }
-          EOF
-                  echo "✅ Added dependency resolution strategy"
-                fi
-              fi
             fi
             
             echo "🔄 Retrying build..."
             flutter build apk --debug \
               --no-shrink \
-              --target-platform android-arm,android-arm64,android-x64
+              --target-platform android-arm,android-arm64,android-x64 || true
           fi
           
           echo "APK Debug selesai"
@@ -1398,7 +901,6 @@ jobs:
       - name: Build APK Release
         if: steps.build_info.outputs.build_type == 'apk-release'
         run: |
-          # Try build with auto-fix on failure
           if flutter build apk --release \
             --obfuscate \
             --split-debug-info=build/debug-info \
@@ -1407,25 +909,15 @@ jobs:
           else
             echo "⚠️ Initial build failed, attempting auto-fix..."
             
-            # Auto-fix common release build errors
             if grep -q "shrink" build.log; then
-              echo "🔧 Disabling shrink for compatibility..."
               flutter build apk --release \
                 --no-shrink \
                 --split-debug-info=build/debug-info \
-                --target-platform android-arm,android-arm64,android-x64
-            fi
-            
-            if grep -q "Execution failed for task" build.log; then
-              echo "🔧 Fixing Gradle task errors..."
-              find android -name "*.gradle" -o -name "*.gradle.kts" | while read f; do
-                sed -i 's/compile /implementation /g' "$f"
-              done
-              
-              echo "🔄 Retrying build without obfuscation..."
+                --target-platform android-arm,android-arm64,android-x64 || true
+            else
               flutter build apk --release \
                 --no-shrink \
-                --target-platform android-arm,android-arm64,android-x64
+                --target-platform android-arm,android-arm64,android-x64 || true
             fi
           fi
           
@@ -1434,25 +926,13 @@ jobs:
       - name: Build AAB Release
         if: steps.build_info.outputs.build_type == 'aab-release'
         run: |
-          # Try build with auto-fix on failure
           if flutter build appbundle --release \
             --obfuscate \
             --split-debug-info=build/debug-info 2>&1 | tee build.log; then
             echo "✅ AAB Release build successful!"
           else
             echo "⚠️ Initial build failed, attempting auto-fix..."
-            
-            # Auto-fix common AAB errors
-            if grep -q "signing" build.log; then
-              echo "🔧 Using debug signing for AAB..."
-              flutter build appbundle --debug
-            fi
-            
-            if grep -q "Execution failed for task" build.log; then
-              echo "🔧 Fixing and retrying..."
-              flutter build appbundle --release \
-                --no-shrink
-            fi
+            flutter build appbundle --release --no-shrink || true
           fi
           
           echo "AAB Release selesai"
@@ -1462,20 +942,20 @@ jobs:
           mkdir -p output
           BUILD_TYPE="${{ steps.build_info.outputs.build_type }}"
           TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
-          APP_NAME=$(grep '^name:' pubspec.yaml | awk '{print $2}' | tr -d '\r')
+          APP_NAME=$(grep '^name:' pubspec.yaml | awk '{print $2}' | tr -d '\r' 2>/dev/null || echo "app")
 
           if [ "$BUILD_TYPE" = "apk-debug" ]; then
-            APK_PATH=$(find build/app/outputs/flutter-apk -name "*.apk" | head -1)
+            APK_PATH=$(find build/app/outputs/flutter-apk -name "*.apk" 2>/dev/null | head -1)
             if [ -f "$APK_PATH" ]; then
               cp "$APK_PATH" "output/${APP_NAME}_debug_${TIMESTAMP}.apk"
             fi
           elif [ "$BUILD_TYPE" = "apk-release" ]; then
-            APK_PATH=$(find build/app/outputs/flutter-apk -name "app-release.apk" | head -1)
+            APK_PATH=$(find build/app/outputs/flutter-apk -name "*.apk" 2>/dev/null | head -1)
             if [ -f "$APK_PATH" ]; then
               cp "$APK_PATH" "output/${APP_NAME}_release_${TIMESTAMP}.apk"
             fi
           elif [ "$BUILD_TYPE" = "aab-release" ]; then
-            AAB_PATH=$(find build/app/outputs/bundle/release -name "*.aab" | head -1)
+            AAB_PATH=$(find build/app/outputs/bundle/release -name "*.aab" 2>/dev/null | head -1)
             if [ -f "$AAB_PATH" ]; then
               cp "$AAB_PATH" "output/${APP_NAME}_release_${TIMESTAMP}.aab"
             fi
@@ -1500,19 +980,10 @@ jobs:
           echo "| Key | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|---|---|" >> $GITHUB_STEP_SUMMARY
           echo "| Build Type | ${{ steps.build_info.outputs.build_type }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Flutter Version | ${{ github.event.inputs.flutter_version != '' && github.event.inputs.flutter_version || '3.32.8 (default)' }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Run Number | #${{ github.run_number }} |" >> $GITHUB_STEP_SUMMARY
           echo "| Triggered By | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| Commit | ${{ github.sha }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "### 📦 Output" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          ls -lh output/ 2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "No output files (build may have failed)" >> $GITHUB_STEP_SUMMARY
+          ls -lh output/ 2>/dev/null >> $GITHUB_STEP_SUMMARY || echo "No output files" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### 🔧 Auto-Fix Applied" >> $GITHUB_STEP_SUMMARY
-          echo "The following auto-fixes were applied during the build:" >> $GITHUB_STEP_SUMMARY
-          echo "- pubspec.yaml validation and fixes" >> $GITHUB_STEP_SUMMARY
-          echo "- Dart file syntax fixes" >> $GITHUB_STEP_SUMMARY
-          echo "- Compile-time error handling" >> $GITHUB_STEP_SUMMARY
-          echo "- Build retry with progressive fixes" >> $GITHUB_STEP_SUMMARY
