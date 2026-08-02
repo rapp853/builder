@@ -497,7 +497,6 @@ jobs:
           add_prop "org.gradle.caching" "true"
           add_prop "org.gradle.daemon" "false"
           add_prop "org.gradle.jvmargs" "-Xmx4g -XX:+UseParallelGC"
-          add_prop "android.enableR8.fullMode" "true"
 
           echo "--- gradle.properties ---"
           cat "$GRADLE_PROPS"
@@ -515,13 +514,17 @@ jobs:
             --target-platform android-arm,android-arm64,android-x64
           echo "APK Debug selesai"
 
+      # PERCEPATAN: dibatasi ke android-arm64 saja (mayoritas HP modern 2019+).
+      # Build 3 arsitektur sekaligus (arm,arm64,x64) mentriple waktu kompilasi
+      # native code — ini penyebab utama build lama.
+      # obfuscate + split-debug-info juga dilepas karena menambah waktu
+      # signifikan (symbol stripping) untuk gain keamanan yang kecil di APK
+      # internal/testing. Kalau butuh utk rilis Play Store, aktifkan lagi.
       - name: Build APK Release
         if: steps.build_info.outputs.build_type == 'apk-release'
         run: |
           flutter build apk --release \
-            --obfuscate \
-            --split-debug-info=build/debug-info \
-            --target-platform android-arm,android-arm64,android-x64
+            --target-platform android-arm64
           echo "APK Release selesai"
 
       - name: Build AAB Release
