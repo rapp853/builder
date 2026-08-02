@@ -44,28 +44,40 @@ jobs:
         uses: actions/checkout@v4
 
       # ============================================
-      # ⬇️ DOWNLOAD ZIP DARI RELEASE BOT
+      # ⬇️ DOWNLOAD ZIP DARI RELEASE BOT (DENGAN VALIDASI KETAT)
       # ============================================
       - name: 📥 Download Project ZIP from Bot Release
         if: github.event.inputs.release_tag != ''
         run: |
-          echo "📥 Mendownload project dari release: ${{ github.event.inputs.release_tag }}"
+          echo "=========================================="
+          echo "=== DOWNLOAD PROJECT FROM RELEASE ==="
+          echo "=========================================="
+          echo "📥 Target release: ${{ github.event.inputs.release_tag }}"
+          echo ""
           
-          # TUNGGU dulu 15 detik untuk memastikan release sudah siap
-          echo "⏳ Menunggu 15 detik untuk memastikan release siap..."
-          sleep 15
+          # TUNGGU lebih lama untuk memastikan asset benar-benar siap
+          echo "⏳ Menunggu 30 detik untuk memastikan release dan asset siap..."
+          sleep 30
           
-          # Get release info dengan RETRY
-          MAX_RETRY=5
+          # Get release info dengan RETRY yang lebih agresif
+          MAX_RETRY=10
           RETRY=0
           ASSET_URL=""
+          ASSET_ID=""
+          ASSET_SIZE=0
           
           while [ $RETRY -lt $MAX_RETRY ]; do
+            echo ""
             echo "🔍 Attempt $((RETRY+1))/$MAX_RETRY: Mencari release..."
             
             # Get release by tag
             RELEASE_RESPONSE=$(curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/vnd.github+json" \
               "https://api.github.com/repos/${{ github.repository }}/releases/tags/${{ github.event.inputs.release_tag }}")
+            
+            # Debug: tampilkan response
+            echo "📋 Release API Response:"
+            echo "$RELEASE_RESPONSE" | jq '{id: .id, tag_name: .tag_name, assets_count: (.assets | length)}' 2>/dev/null || echo "(failed to parse JSON)"
             
             # Cek apakah release ada
             RELEASE_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.id')
@@ -73,14 +85,29 @@ jobs:
             if [ "$RELEASE_ID" != "null" ] && [ -n "$RELEASE_ID" ]; then
               echo "✅ Release ditemukan! ID: $RELEASE_ID"
               
-              # Get asset URL
+              # Get asset info
               ASSET_URL=$(echo "$RELEASE_RESPONSE" | jq -r '.assets[0].browser_download_url')
+              ASSET_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.assets[0].id')
+              ASSET_NAME=$(echo "$RELEASE_RESPONSE" | jq -r '.assets[0].name')
+              ASSET_SIZE=$(echo "$RELEASE_RESPONSE" | jq -r '.assets[0].size')
+              ASSET_STATE=$(echo "$RELEASE_RESPONSE" | jq -r '.assets[0].state')
               
-              if [ "$ASSET_URL" != "null" ] && [ -n "$ASSET_URL" ]; then
-                echo "✅ Asset ditemukan: $ASSET_URL"
+              echo "📦 Asset Info:"
+              echo "  - Name: $ASSET_NAME"
+              echo "  - ID: $ASSET_ID"
+              echo "  - Size: $ASSET_SIZE bytes"
+              echo "  - State: $ASSET_STATE"
+              echo "  - URL: $ASSET_URL"
+              
+              if [ "$ASSET_URL" != "null" ] && [ -n "$ASSET_URL" ] && [ "$ASSET_SIZE" -gt 1000 ]; then
+                echo "✅ Asset valid dan siap didownload!"
                 break
+              elif [ "$ASSET_SIZE" -le 1000 ]; then
+                echo "⚠️ Asset terlalu kecil (${ASSET_SIZE} bytes), mungkin belum selesai upload..."
+                echo "⏳ Menunggu 15 detik..."
+                sleep 15
               else
-                echo "⚠️ Release ada tapi asset belum siap, tunggu 10 detik..."
+                echo "⚠️ Asset belum siap (state: $ASSET_STATE), tunggu 10 detik..."
                 sleep 10
               fi
             else
@@ -92,37 +119,145 @@ jobs:
           done
           
           if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
-            echo "❌ Gagal mendapatkan asset setelah $MAX_RETRY kali percobaan!"
-            echo "Release response:"
-            echo "$RELEASE_RESPONSE" | jq '.'
-            
-            # Coba list semua release
             echo ""
-            echo "📋 Daftar release yang ada:"
+            echo "❌ Gagal mendapatkan asset setelah $MAX_RETRY kali percobaan!"
+            echo ""
+            echo "📋 Mencoba list semua release yang ada:"
             curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
-              "https://api.github.com/repos/${{ github.repository }}/releases?per_page=5" | \
-              jq '.[].tag_name'
+              "https://api.github.com/repos/${{ github.repository }}/releases?per_page=10" | \
+              jq '.[] | {id: .id, tag_name: .tag_name, assets: [.assets[]? | {name: .name, size: .size, state: .state}]}'
             
+            echo ""
+            echo "❌ BUILD TIDAK DAPAT DILANJUTKAN"
             exit 1
           fi
           
-          echo "📦 Download dari: $ASSET_URL"
-          curl -L -o project.zip "$ASSET_URL"
+          # Download dengan validasi
+          echo ""
+          echo "📥 Mendownload asset..."
           
-          # Cek file
-          if [ ! -f project.zip ]; then
-            echo "❌ File ZIP gagal didownload!"
+          # Download dengan progress dan retry
+          DOWNLOAD_SUCCESS=false
+          for i in 1 2 3; do
+            echo "  Download attempt $i/3..."
+            
+            # Download file
+            HTTP_CODE=$(curl -L -o project.zip -w "%{http_code}" \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/octet-stream" \
+              "$ASSET_URL")
+            
+            echo "  HTTP Status: $HTTP_CODE"
+            
+            # Cek file yang didownload
+            if [ -f project.zip ]; then
+              DOWNLOADED_SIZE=$(stat -c%s project.zip 2>/dev/null || echo 0)
+              echo "  Downloaded size: $DOWNLOADED_SIZE bytes"
+              
+              # Validasi ukuran
+              if [ "$DOWNLOADED_SIZE" -gt 1000 ]; then
+                # Cek apakah ini ZIP valid
+                if unzip -t project.zip >/dev/null 2>&1; then
+                  echo "  ✅ ZIP file valid!"
+                  DOWNLOAD_SUCCESS=true
+                  break
+                else
+                  echo "  ⚠️ File downloaded but not a valid ZIP (corrupt)"
+                  echo "  📝 First 100 bytes:"
+                  head -c 100 project.zip | xxd | head -10
+                  
+                  # Coba cek apakah ini HTML error page
+                  if head -c 100 project.zip | grep -q "<html\|<!DOCTYPE"; then
+                    echo "  ❌ Received HTML instead of ZIP (likely authentication error)"
+                    echo "  📝 Content preview:"
+                    head -c 500 project.zip
+                  fi
+                fi
+              elif [ "$DOWNLOADED_SIZE" -eq 9 ]; then
+                echo "  ⚠️ File only 9 bytes (likely 'Not Found' response)"
+                echo "  📝 Content:"
+                cat project.zip
+              else
+                echo "  ⚠️ File too small: $DOWNLOADED_SIZE bytes"
+              fi
+            else
+              echo "  ❌ File not created"
+            fi
+            
+            # Hapus file corrupt dan tunggu sebelum retry
+            rm -f project.zip
+            echo "  ⏳ Waiting 10 seconds before retry..."
+            sleep 10
+          done
+          
+          if [ "$DOWNLOAD_SUCCESS" = false ]; then
+            echo ""
+            echo "❌ Gagal mendownload ZIP yang valid setelah 3 kali percobaan!"
+            
+            # Coba download via API asset langsung
+            echo "🔧 Mencoba metode alternatif: download via asset API..."
+            curl -L -o project.zip \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -H "Accept: application/octet-stream" \
+              "https://api.github.com/repos/${{ github.repository }}/releases/assets/$ASSET_ID"
+            
+            if [ -f project.zip ] && unzip -t project.zip >/dev/null 2>&1; then
+              echo "✅ ZIP downloaded successfully via asset API!"
+            else
+              echo "❌ Semua metode download gagal!"
+              echo ""
+              echo "🔍 Debug info:"
+              echo "  Asset URL: $ASSET_URL"
+              echo "  Asset ID: $ASSET_ID"
+              echo "  Expected size: $ASSET_SIZE bytes"
+              echo ""
+              echo "📋 Mencoba list asset langsung:"
+              curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+                "https://api.github.com/repos/${{ github.repository }}/releases/assets/$ASSET_ID" | jq '.'
+              
+              exit 1
+            fi
+          fi
+          
+          # Verifikasi final ZIP
+          echo ""
+          echo "🔍 Verifikasi final ZIP file..."
+          FINAL_SIZE=$(stat -c%s project.zip 2>/dev/null || echo 0)
+          echo "  Size: $FINAL_SIZE bytes"
+          
+          if [ "$FINAL_SIZE" -lt 1000 ]; then
+            echo "❌ ZIP file terlalu kecil: $FINAL_SIZE bytes"
             exit 1
           fi
           
-          echo "📏 Size: $(du -h project.zip | cut -f1)"
+          # Test ZIP integrity
+          echo "  Testing ZIP integrity..."
+          if unzip -t project.zip; then
+            echo "  ✅ ZIP integrity OK"
+          else
+            echo "  ❌ ZIP file corrupt!"
+            echo "  📝 File type:"
+            file project.zip
+            echo "  📝 Hex dump (first 200 bytes):"
+            xxd project.zip | head -20
+            exit 1
+          fi
           
           # Ekstrak ZIP
+          echo ""
           echo "📂 Mengekstrak ZIP..."
           mkdir -p project_extracted
-          unzip -o project.zip -d project_extracted/
+          
+          if unzip -o project.zip -d project_extracted/; then
+            echo "✅ ZIP extracted successfully"
+          else
+            echo "❌ Failed to extract ZIP"
+            exit 1
+          fi
           
           # Cari pubspec.yaml
+          echo ""
+          echo "🔍 Mencari pubspec.yaml..."
           if [ -f "project_extracted/pubspec.yaml" ]; then
             echo "✅ pubspec.yaml ditemukan di root ZIP"
             cp -rf project_extracted/* .
@@ -139,8 +274,12 @@ jobs:
               cp -rf "$PROJECT_DIR"/.* . 2>/dev/null || true
             else
               echo "❌ pubspec.yaml TIDAK DITEMUKAN!"
-              echo "Isi ZIP:"
+              echo ""
+              echo "📋 Isi ZIP:"
               ls -laR project_extracted/ | head -50
+              echo ""
+              echo "📋 Mencoba mencari file yang mirip:"
+              find project_extracted -name "*.yaml" -o -name "*.yml" | head -10
               exit 1
             fi
           fi
@@ -148,11 +287,19 @@ jobs:
           # Cleanup
           rm -rf project_extracted project.zip
           
-          echo "✅ Project siap:"
-          echo "---"
+          echo ""
+          echo "=========================================="
+          echo "=== PROJECT DOWNLOAD COMPLETE ==="
+          echo "=========================================="
+          echo ""
+          echo "📋 Project structure:"
           ls -la
-          echo "---"
-          head -20 pubspec.yaml
+          echo ""
+          echo "📋 pubspec.yaml preview:"
+          head -20 pubspec.yaml 2>/dev/null || echo "(pubspec.yaml not found)"
+          echo ""
+          echo "📋 lib/ contents:"
+          ls -la lib/ 2>/dev/null || echo "(lib/ not found)"
 
       - name: Setup Java 17
         uses: actions/setup-java@v4
