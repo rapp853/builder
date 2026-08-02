@@ -51,14 +51,14 @@ jobs:
         run: |
           echo "📥 Mendownload project dari release: ${{ github.event.inputs.release_tag }}"
           
-          # TUNGGU dulu 15 detik untuk memastikan release sudah siap
-          echo "⏳ Menunggu 15 detik untuk memastikan release siap..."
-          sleep 15
+          # TUNGGU sebentar untuk memastikan release sudah siap
+          echo "⏳ Menunggu 5 detik untuk memastikan release siap..."
+          sleep 5
           
           # Get release info dengan RETRY
           MAX_RETRY=5
           RETRY=0
-          ASSET_URL=""
+          ASSET_ID=""
           
           while [ $RETRY -lt $MAX_RETRY ]; do
             echo "🔍 Attempt $((RETRY+1))/$MAX_RETRY: Mencari release..."
@@ -73,11 +73,13 @@ jobs:
             if [ "$RELEASE_ID" != "null" ] && [ -n "$RELEASE_ID" ]; then
               echo "✅ Release ditemukan! ID: $RELEASE_ID"
               
-              # Get asset URL
-              ASSET_URL=$(echo "$RELEASE_RESPONSE" | jq -r '.assets[0].browser_download_url')
+              # ============ FIX: ambil ASSET ID, bukan browser_download_url ============
+              # browser_download_url tidak bisa dipakai dengan header Authorization
+              # untuk repo private — harus lewat endpoint API /releases/assets/{id}
+              ASSET_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.assets[0].id')
               
-              if [ "$ASSET_URL" != "null" ] && [ -n "$ASSET_URL" ]; then
-                echo "✅ Asset ditemukan: $ASSET_URL"
+              if [ "$ASSET_ID" != "null" ] && [ -n "$ASSET_ID" ]; then
+                echo "✅ Asset ditemukan! ID: $ASSET_ID"
                 break
               else
                 echo "⚠️ Release ada tapi asset belum siap, tunggu 10 detik..."
@@ -91,7 +93,7 @@ jobs:
             RETRY=$((RETRY+1))
           done
           
-          if [ -z "$ASSET_URL" ] || [ "$ASSET_URL" = "null" ]; then
+          if [ -z "$ASSET_ID" ] || [ "$ASSET_ID" = "null" ]; then
             echo "❌ Gagal mendapatkan asset setelah $MAX_RETRY kali percobaan!"
             echo "Release response:"
             echo "$RELEASE_RESPONSE" | jq '.'
@@ -106,8 +108,15 @@ jobs:
             exit 1
           fi
           
-          echo "📦 Download dari: $ASSET_URL"
-          curl -L -o project.zip "$ASSET_URL"
+          echo "📦 Download asset ID: $ASSET_ID"
+          
+          # ============ FIX: pakai endpoint API assets, BUKAN browser_download_url ============
+          # Endpoint ini yang benar untuk download asset repo private via token
+          curl -L \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/octet-stream" \
+            -o project.zip \
+            "https://api.github.com/repos/${{ github.repository }}/releases/assets/$ASSET_ID"
           
           # Cek file
           if [ ! -f project.zip ]; then
@@ -116,6 +125,13 @@ jobs:
           fi
           
           echo "📏 Size: $(du -h project.zip | cut -f1)"
+          
+          # ============ FIX: validasi bahwa file yang terdownload benar ZIP ============
+          if ! file project.zip | grep -qi "zip"; then
+            echo "❌ File yang didownload BUKAN file ZIP! Isinya:"
+            cat project.zip
+            exit 1
+          fi
           
           # Ekstrak ZIP
           echo "📂 Mengekstrak ZIP..."
@@ -167,6 +183,31 @@ jobs:
           flutter-version: '3.32.8'
           channel: 'stable'
           cache: true
+
+      # ============================================
+      # ⚡ OPTIMASI: Cache ImageMagick (hindari apt-get update tiap build)
+      # ============================================
+      - name: ⚡ Cache ImageMagick
+        uses: awalsh128/cache-apt-pkgs-action@latest
+        with:
+          packages: imagemagick
+          version: 1.0
+
+      # ============================================
+      # ⚡ OPTIMASI: Gradle build cache & parallel execution
+      # ============================================
+      - name: ⚡ Optimize Gradle
+        run: |
+          mkdir -p ~/.gradle
+          cat >> gradle.properties << 'EOF'
+          org.gradle.jvmargs=-Xmx4096m -XX:+HeapDumpOnOutOfMemoryError
+          org.gradle.parallel=true
+          org.gradle.caching=true
+          org.gradle.configureondemand=true
+          android.useAndroidX=true
+          EOF
+          echo "✅ gradle.properties dioptimasi:"
+          cat gradle.properties
 
       # ============================================
       # 🎨 REGENERATE LAUNCHER ICONS (FIX UTAMA)
@@ -616,7 +657,7 @@ jobs:
         run: |
           flutter build apk --debug \
             --no-shrink \
-            --target-platform android-arm,android-arm64,android-x64
+            --target-platform android-arm64
           echo "APK Debug selesai"
 
       - name: Build APK Release
@@ -625,7 +666,7 @@ jobs:
           flutter build apk --release \
             --obfuscate \
             --split-debug-info=build/debug-info \
-            --target-platform android-arm,android-arm64,android-x64
+            --target-platform android-arm64
           echo "APK Release selesai"
 
       - name: Build AAB Release
