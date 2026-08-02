@@ -664,7 +664,7 @@ jobs:
           echo "AAB Release selesai"
 
       # ============================================
-      # 🛠️ AUTO FIX PUBSPEC & DART ERRORS (NEW)
+      # 🛠️ AUTO FIX PUBSPEC & DART ERRORS
       # ============================================
       - name: 🛠️ Auto Fix Pubspec & Dart Errors
         if: failure()
@@ -934,43 +934,114 @@ jobs:
             flutter build appbundle --release
           fi
 
-      - name: Prepare Output Files
+      # ============================================
+      # 📦 PREPARE OUTPUT FILES (FIXED - ARTIFACT UPLOAD)
+      # ============================================
+      - name: 📦 Prepare Output Files
         if: always()
         run: |
           mkdir -p output
           BUILD_TYPE="${{ steps.build_info.outputs.build_type }}"
           TIMESTAMP=$(date +"%Y%m%d_%H%M%S")
           APP_NAME=$(grep '^name:' pubspec.yaml | awk '{print $2}' | tr -d '\r')
-
+          
+          echo "=========================================="
+          echo "=== PREPARING OUTPUT FILES ==="
+          echo "=========================================="
+          echo "Build type: $BUILD_TYPE"
+          echo "APP_NAME: $APP_NAME"
+          echo ""
+          
+          # Debug: cari SEMUA file build
+          echo "=== DEBUG: Mencari semua file build ==="
+          echo ""
+          echo "--- File APK ---"
+          find . -name "*.apk" -type f 2>/dev/null | head -20
+          echo ""
+          echo "--- File AAB ---"
+          find . -name "*.aab" -type f 2>/dev/null | head -20
+          echo ""
+          echo "--- Isi build/app/outputs/ ---"
+          ls -laR build/app/outputs/ 2>/dev/null || echo "(tidak ditemukan)"
+          echo ""
+          
+          # Cari dan copy file sesuai tipe build
           if [ "$BUILD_TYPE" = "apk-debug" ]; then
-            APK_PATH=$(find build/app/outputs/flutter-apk -name "*.apk" 2>/dev/null | head -1)
+            echo "Mencari APK Debug..."
+            APK_PATH=$(find . -name "app-debug.apk" -o -name "*debug*.apk" 2>/dev/null | head -1)
+            if [ -z "$APK_PATH" ]; then
+              APK_PATH=$(find build/app/outputs -name "*.apk" 2>/dev/null | head -1)
+            fi
+            if [ -z "$APK_PATH" ]; then
+              APK_PATH=$(find . -name "*.apk" 2>/dev/null | head -1)
+            fi
+            
             if [ -n "$APK_PATH" ]; then
               cp "$APK_PATH" "output/${APP_NAME}_debug_${TIMESTAMP}.apk"
-              echo "✅ APK copied: $APK_PATH"
+              echo "✅ APK Debug: $APK_PATH ($(du -h "$APK_PATH" | cut -f1))"
+            else
+              echo "❌ APK Debug TIDAK DITEMUKAN!"
             fi
+            
           elif [ "$BUILD_TYPE" = "apk-release" ]; then
-            APK_PATH=$(find build/app/outputs/flutter-apk -name "*.apk" 2>/dev/null | head -1)
+            echo "Mencari APK Release..."
+            APK_PATH=$(find . -name "app-release.apk" -o -name "*release*.apk" 2>/dev/null | head -1)
+            if [ -z "$APK_PATH" ]; then
+              APK_PATH=$(find build/app/outputs -name "*.apk" 2>/dev/null | head -1)
+            fi
+            if [ -z "$APK_PATH" ]; then
+              APK_PATH=$(find . -name "*.apk" 2>/dev/null | head -1)
+            fi
+            
             if [ -n "$APK_PATH" ]; then
               cp "$APK_PATH" "output/${APP_NAME}_release_${TIMESTAMP}.apk"
-              echo "✅ APK copied: $APK_PATH"
+              echo "✅ APK Release: $APK_PATH ($(du -h "$APK_PATH" | cut -f1))"
+            else
+              echo "❌ APK Release TIDAK DITEMUKAN!"
             fi
+            
           elif [ "$BUILD_TYPE" = "aab-release" ]; then
-            AAB_PATH=$(find build/app/outputs/bundle/release -name "*.aab" 2>/dev/null | head -1)
+            echo "Mencari AAB Release..."
+            AAB_PATH=$(find . -name "app-release.aab" -o -name "*.aab" 2>/dev/null | head -1)
+            if [ -z "$AAB_PATH" ]; then
+              AAB_PATH=$(find build/app/outputs -name "*.aab" 2>/dev/null | head -1)
+            fi
+            if [ -z "$AAB_PATH" ]; then
+              AAB_PATH=$(find . -name "*.aab" 2>/dev/null | head -1)
+            fi
+            
             if [ -n "$AAB_PATH" ]; then
               cp "$AAB_PATH" "output/${APP_NAME}_release_${TIMESTAMP}.aab"
-              echo "✅ AAB copied: $AAB_PATH"
+              echo "✅ AAB Release: $AAB_PATH ($(du -h "$AAB_PATH" | cut -f1))"
+            else
+              echo "❌ AAB Release TIDAK DITEMUKAN!"
             fi
           fi
+          
+          echo ""
+          echo "=== OUTPUT FILES ==="
+          ls -lh output/ 2>/dev/null || echo "(tidak ada file output)"
+          
+          # Set output untuk digunakan step selanjutnya
+          if [ -n "$(ls -A output/ 2>/dev/null)" ]; then
+            echo "HASIL_BUILD=success" >> $GITHUB_OUTPUT
+          else
+            echo "HASIL_BUILD=failed" >> $GITHUB_OUTPUT
+          fi
 
-          echo "Output files:"
-          ls -lh output/ 2>/dev/null || echo "(no output files)"
-
-      - name: Upload Build Artifact
+      # ============================================
+      # 📤 UPLOAD BUILD ARTIFACT (FIXED)
+      # ============================================
+      - name: 📤 Upload Build Artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: flutter-build-${{ steps.build_info.outputs.build_type }}-${{ github.run_number }}
-          path: output/
+          path: |
+            output/*.apk
+            output/*.aab
+            build/app/outputs/flutter-apk/*.apk
+            build/app/outputs/bundle/release/*.aab
           retention-days: 3
           if-no-files-found: warn
 
