@@ -106,8 +106,9 @@ jobs:
             exit 1
           fi
           
+          # Download dengan follow redirect
           echo "📦 Download dari: $ASSET_URL"
-          curl -L -o project.zip "$ASSET_URL"
+          curl -L -f -o project.zip "$ASSET_URL"
           
           # Cek file
           if [ ! -f project.zip ]; then
@@ -115,12 +116,64 @@ jobs:
             exit 1
           fi
           
-          echo "📏 Size: $(du -h project.zip | cut -f1)"
+          FILE_SIZE=$(stat -c%s project.zip 2>/dev/null || echo 0)
+          echo "📏 Size: $(du -h project.zip | cut -f1) ($FILE_SIZE bytes)"
+          
+          # VALIDASI: Cek apakah file benar-benar ZIP
+          FILE_TYPE=$(file project.zip)
+          echo "📄 File type: $FILE_TYPE"
+          
+          if [ "$FILE_SIZE" -lt 100 ]; then
+            echo "❌ File terlalu kecil ($FILE_SIZE bytes), bukan ZIP valid!"
+            echo "Isi file:"
+            cat project.zip
+            echo ""
+            echo "Mungkin release belum siap atau asset korup."
+            echo "Menunggu 30 detik dan mencoba lagi..."
+            sleep 30
+            curl -L -f -o project.zip "$ASSET_URL"
+            FILE_SIZE=$(stat -c%s project.zip 2>/dev/null || echo 0)
+            echo "📏 Size retry: $(du -h project.zip | cut -f1) ($FILE_SIZE bytes)"
+          fi
+          
+          if [ "$FILE_SIZE" -lt 1000 ]; then
+            echo "❌ File masih terlalu kecil setelah retry!"
+            echo "Mencoba download dengan header berbeda..."
+            curl -L -f -H "Accept: application/octet-stream" -o project.zip "$ASSET_URL"
+            FILE_SIZE=$(stat -c%s project.zip 2>/dev/null || echo 0)
+            echo "📏 Size retry 2: $FILE_SIZE bytes"
+          fi
+          
+          if [ "$FILE_SIZE" -lt 1000 ]; then
+            echo "❌ File tetap kecil, coba gunakan API download..."
+            ASSET_ID=$(echo "$RELEASE_RESPONSE" | jq -r '.assets[0].id')
+            curl -L -f -H "Accept: application/octet-stream" \
+              -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+              -o project.zip \
+              "https://api.github.com/repos/${{ github.repository }}/releases/assets/$ASSET_ID"
+            FILE_SIZE=$(stat -c%s project.zip 2>/dev/null || echo 0)
+            echo "📏 Size retry 3: $FILE_SIZE bytes"
+          fi
+          
+          if [ "$FILE_SIZE" -lt 1000 ]; then
+            echo "❌ GAGAL TOTAL! File tidak bisa didownload dengan benar."
+            echo "File size: $FILE_SIZE bytes"
+            echo "File content:"
+            cat project.zip 2>/dev/null || echo "(binary)"
+            exit 1
+          fi
           
           # Ekstrak ZIP
           echo "📂 Mengekstrak ZIP..."
           mkdir -p project_extracted
-          unzip -o project.zip -d project_extracted/
+          unzip -o project.zip -d project_extracted/ || {
+            echo "❌ Gagal mengekstrak ZIP! Mencoba dengan 7z..."
+            sudo apt-get install -y -qq p7zip-full 2>/dev/null
+            7z x project.zip -oproject_extracted/ -y || {
+              echo "❌ Gagal total mengekstrak!"
+              exit 1
+            }
+          }
           
           # Cari pubspec.yaml
           if [ -f "project_extracted/pubspec.yaml" ]; then
@@ -198,7 +251,7 @@ jobs:
             
             # Hapus SEMUA ic_launcher yang ada
             echo "🗑️ Removing all existing ic_launcher files..."
-            find android/app/src/main/res -name "ic_launcher*" -type f -delete
+            find android/app/src/main/res -name "ic_launcher*" -type f -delete 2>/dev/null || true
             
             # Buat icon untuk setiap density
             echo "🎨 Creating icons for all densities..."
@@ -742,25 +795,28 @@ jobs:
           BUILD_TYPE="${{ steps.build_info.outputs.build_type }}"
           echo "Build type: $BUILD_TYPE"
           
+          # Cek apakah flutter masih ada
+          if ! command -v flutter >/dev/null 2>&1; then
+            echo "⚠️ Flutter not found! Ini tidak seharusnya terjadi."
+            echo "Path: $PATH"
+            exit 1
+          fi
+          
           # Ultimate clean
           flutter clean 2>/dev/null || true
           rm -rf build/
           if [ -d "android" ]; then
             rm -rf android/.gradle/
             rm -rf android/app/build/
-          fi
-          
-          # Fix semua gradle files
-          if [ -d "android" ]; then
+            
+            # Fix semua gradle files
             find android -name "*.gradle" -o -name "*.gradle.kts" | while read f; do
               sed -i 's/compileSdkVersion.*$/compileSdkVersion 36/g' "$f"
               sed -i 's/minSdkVersion.*$/minSdkVersion 23/g' "$f"
               sed -i 's/targetSdkVersion.*$/targetSdkVersion 36/g' "$f"
             done
-          fi
-          
-          # Fix lint options
-          if [ -d "android" ]; then
+            
+            # Fix lint options
             find android -name "build.gradle" | while read f; do
               if ! grep -q "lintOptions" "$f"; then
                 sed -i '/android {/a \    lintOptions {\n        checkReleaseBuilds false\n        abortOnError false\n    }' "$f"
@@ -768,7 +824,6 @@ jobs:
             done
           fi
           
-          # Re-setup Flutter
           flutter pub get
           
           echo "🔄 Final retry..."
