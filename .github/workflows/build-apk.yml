@@ -107,7 +107,14 @@ jobs:
           fi
           
           echo "📦 Download dari: $ASSET_URL"
-          curl -L -o project.zip "$ASSET_URL"
+          
+          # ============ FIX: tambahkan header Authorization & Accept ============
+          # Wajib untuk repo private — tanpa ini GitHub balas 404 (bukan ZIP)
+          curl -L \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/octet-stream" \
+            -o project.zip \
+            "$ASSET_URL"
           
           # Cek file
           if [ ! -f project.zip ]; then
@@ -116,6 +123,13 @@ jobs:
           fi
           
           echo "📏 Size: $(du -h project.zip | cut -f1)"
+          
+          # ============ FIX: validasi bahwa file yang terdownload benar ZIP ============
+          if ! file project.zip | grep -qi "zip"; then
+            echo "❌ File yang didownload BUKAN file ZIP! Isinya:"
+            cat project.zip
+            exit 1
+          fi
           
           # Ekstrak ZIP
           echo "📂 Mengekstrak ZIP..."
